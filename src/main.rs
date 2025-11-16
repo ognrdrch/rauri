@@ -145,10 +145,12 @@ fn run() -> Result<()> {
         }
         "-S" => {
             if args.len() < 2 {
-                Ui::error("Please provide a package name to install");
-                std::process::exit(1);
+                // No package name provided, update AUR packages only
+                PackageManager::update_aur_only()?;
+            } else {
+                // Package name provided, install it
+                PackageManager::install(&args[1], &config)?;
             }
-            PackageManager::install(&args[1], &config)?;
         }
         "-Syu" => {
             PackageManager::update_system()?;

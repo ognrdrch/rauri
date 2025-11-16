@@ -168,7 +168,7 @@ impl PackageManager {
         Ok(())
     }
 
-    pub fn update_system() -> Result<()> {
+    pub fn update_aur_only() -> Result<()> {
         // First, clean up tracking to remove uninstalled packages
         Self::cleanup_tracking()?;
         
@@ -237,6 +237,37 @@ impl PackageManager {
         
         Ui::success("AUR package updates complete");
         Ok(())
+    }
+
+    pub fn update_system() -> Result<()> {
+        // Update official packages first
+        Ui::info("Updating official packages...");
+        
+        let sync_result = Command::new("sudo")
+            .arg("pacman")
+            .arg("-Syy")
+            .status()
+            .context("Failed to sync package databases")?;
+        
+        if !sync_result.success() {
+            anyhow::bail!("Failed to sync package databases");
+        }
+        
+        let update_result = Command::new("sudo")
+            .arg("pacman")
+            .arg("-Syu")
+            .arg("--noconfirm")
+            .status()
+            .context("Failed to update system packages")?;
+        
+        if !update_result.success() {
+            anyhow::bail!("Failed to update system packages");
+        }
+        
+        Ui::success("Official packages updated");
+        
+        // Then update AUR packages
+        Self::update_aur_only()
     }
 
     pub fn remove(package_name: &str, config: Option<&Config>) -> Result<()> {

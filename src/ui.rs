@@ -104,8 +104,10 @@ impl Ui {
             println!("Search for packages");
             print!("  {}  ", "-S <package>".yellow());
             println!("Install package (AUR or official)");
+            print!("  {}  ", "-S".yellow());
+            println!("          Update AUR packages only");
             print!("  {}  ", "-Syu".yellow());
-            println!("        Update installed packages");
+            println!("        Update whole system (official + AUR)");
             print!("  {}  ", "-R <package>".yellow());
             println!("Remove package (also removes package folder)");
             print!("  {}  ", "-L".yellow());
@@ -116,7 +118,8 @@ impl Ui {
             println!("Commands:");
             println!("  -Q <package>  Search for packages");
             println!("  -S <package>  Install package (AUR or official)");
-            println!("  -Syu  Update system packages");
+            println!("  -S           Update AUR packages only");
+            println!("  -Syu         Update whole system (official + AUR)");
             println!("  -R <package>  Remove package (also removes package folder)");
             println!("  -L  List installed packages");
             println!("  <AUR_GIT_URL>  Install from AUR git link");
