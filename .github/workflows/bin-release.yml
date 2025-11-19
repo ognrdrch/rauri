@@ -49,10 +49,8 @@ jobs:
       
       - name: Upload artifact (for manual runs)
         if: github.event_name != 'release'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: rauri-binary
           path: rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
