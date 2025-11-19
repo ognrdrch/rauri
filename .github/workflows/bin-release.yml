@@ -17,17 +17,42 @@ jobs:
       - name: Build release binary
         run: cargo build --release
       
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            # Use tag name from release event
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            # For workflow_dispatch or other triggers, get version from Cargo.toml
+            VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | tr -d ' ')
+          fi
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
+      
       - name: Create release tarball
         run: |
           mkdir -p release
           cp target/release/rauri release/
           cp LICENSE release/ 2>/dev/null || true
-          tar czf rauri-${GITHUB_REF#refs/tags/}-x86_64-unknown-linux-gnu.tar.gz -C release .
+          tar czf rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz -C release .
       
       - name: Upload binary to release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: rauri-${GITHUB_REF#refs/tags/}-x86_64-unknown-linux-gnu.tar.gz
+          files: rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload artifact (for manual runs)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v3
+        with:
+          name: rauri-binary
+          path: rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
