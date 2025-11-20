@@ -3,32 +3,54 @@ name: Release
 on:
   release:
     types: [created]
+  workflow_dispatch:  # Allows manual trigger from Actions tab
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+        uses: dtolnay/rust-toolchain@stable
       
-      - name: Build
+      - name: Build release binary
         run: cargo build --release
       
-      - name: Create tarball
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            # Use tag name from release event
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            # For workflow_dispatch or other triggers, get version from Cargo.toml
+            VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | tr -d ' ')
+          fi
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
+      
+      - name: Create release tarball
         run: |
           mkdir -p release
           cp target/release/rauri release/
           cp LICENSE release/ 2>/dev/null || true
-          tar czf rauri-${{ github.event.release.tag_name }}-x86_64-unknown-linux-gnu.tar.gz -C release .
+          tar czf rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz -C release .
       
-      - name: Upload binary
-        uses: actions/upload-release-asset@v1
+      - name: Upload binary to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./rauri-${{ github.event.release.tag_name }}-x86_64-unknown-linux-gnu.tar.gz
-          asset_name: rauri-${{ github.event.release.tag_name }}-x86_64-unknown-linux-gnu.tar.gz
-          asset_content_type: application/gzip
+          files: rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload artifact (for manual runs)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rauri-binary
+          path: rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+
