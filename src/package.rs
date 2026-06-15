@@ -300,7 +300,6 @@ impl PackageManager {
     }
 
     pub fn update_aur_only(config: &Config) -> Result<()> {
-        Self::update_mirrors(config)?;
         Self::cleanup_tracking()?;
 
         let tracked_packages = PackageTracker::load().unwrap_or_default();
@@ -366,8 +365,6 @@ impl PackageManager {
 
     /// Update the full system. Pass skip_aur=true to only update official packages.
     pub fn update_system(config: &Config, skip_aur: bool) -> Result<()> {
-        Self::update_mirrors(config)?;
-
         Ui::info("Updating official packages...");
 
         let sync_result = Command::new("sudo")

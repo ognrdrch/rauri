@@ -20,7 +20,8 @@ Commands
  rauri -Q <package>     # Search AUR & Official Packages
  rauri -S <package>     # Install AUR & Official Packages
  rauri -S               # Update AUR packages only
- rauri -Syu             # Update whole system (official + AUR)
+ rauri -Syu             # Update whole system (pacman -Syy then -Syu, then AUR)
+ rauri -M               # Update mirrorlist with reflector
  rauri -R <package>     # Remove AUR & Official Packages
  rauri -L               # List installed AUR Packages
 Options    

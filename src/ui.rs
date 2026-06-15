@@ -98,6 +98,7 @@ impl Ui {
         let r = &config.cmd_remove;
         let l = &config.cmd_list;
         let la = format!("{}A", l);
+        let m = &config.cmd_update_mirrors;
         let lim = config.search_limit;
 
         if is_tty {
@@ -110,10 +111,12 @@ impl Ui {
                 format!("{i}, --install <pkg>").yellow());
             println!("  {}  Update AUR packages only",
                 format!("{i}, --update-aur").yellow());
-            println!("  {}  Update whole system (official + AUR)",
+            println!("  {}  Update whole system (pacman -Syy then -Syu, then AUR)",
                 format!("{u}, --update-all").yellow());
             println!("  {}  Update official packages only (skip AUR)",
                 format!("{u} --skip-aur, --update-all --skip-aur").yellow());
+            println!("  {}  Update mirrorlist with reflector",
+                format!("{m}, --update-mirrors").yellow());
             println!("  {}  Remove package (also removes package folder)",
                 format!("{r}, --remove <pkg>").yellow());
             println!("  {}  List AUR packages installed via rauri",
@@ -128,8 +131,9 @@ impl Ui {
             println!("  {sa}, --search-all <pkg>               Search packages (show all results)");
             println!("  {i}, --install <pkg>                  Install package (AUR or official)");
             println!("  {i}, --update-aur                     Update AUR packages only");
-            println!("  {u}, --update-all                     Update whole system (official + AUR)");
+            println!("  {u}, --update-all                     Update whole system (pacman -Syy then -Syu, then AUR)");
             println!("  {u} --skip-aur, --update-all --skip-aur  Update official packages only");
+            println!("  {m}, --update-mirrors                 Update mirrorlist with reflector");
             println!("  {r}, --remove <pkg>                   Remove package");
             println!("  {l}, --list                           List AUR packages installed via rauri");
             println!("  {la}, --list-all                       List all installed system packages");
@@ -147,6 +151,7 @@ impl Ui {
         println!("  rauri {u}");
         println!("  rauri {u} --skip-aur");
         println!("  rauri --update-aur");
+        println!("  rauri {m}");
         println!("  rauri {r} package-name");
         println!("  rauri {l}");
         println!("  rauri {la}");

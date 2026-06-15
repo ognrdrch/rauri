@@ -158,6 +158,8 @@ fn run() -> Result<()> {
         PackageManager::list_all()?;
     } else if config.is_list_cmd(&command) {
         PackageManager::list_installed()?;
+    } else if config.is_update_mirrors_cmd(&command) {
+        PackageManager::update_mirrors(&config)?;
     } else {
         Ui::error(&format!("Unknown command: {}", command));
         Ui::print_help(&config);

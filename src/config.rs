@@ -30,6 +30,9 @@ pub struct Config {
     /// Short flag for list AUR packages (default: -L). Long form --list always works.
     #[serde(default = "default_cmd_list")]
     pub cmd_list: String,
+    /// Short flag for updating mirrors with reflector (default: -M). Long form --update-mirrors always works.
+    #[serde(default = "default_cmd_update_mirrors")]
+    pub cmd_update_mirrors: String,
 }
 
 fn default_use_color() -> bool { true }
@@ -40,6 +43,7 @@ fn default_cmd_install() -> String { "-S".to_string() }
 fn default_cmd_update_all() -> String { "-Syu".to_string() }
 fn default_cmd_remove() -> String { "-R".to_string() }
 fn default_cmd_list() -> String { "-L".to_string() }
+fn default_cmd_update_mirrors() -> String { "-M".to_string() }
 
 impl Config {
     pub fn default() -> Self {
@@ -55,6 +59,7 @@ impl Config {
             cmd_update_all: default_cmd_update_all(),
             cmd_remove: default_cmd_remove(),
             cmd_list: default_cmd_list(),
+            cmd_update_mirrors: default_cmd_update_mirrors(),
         }
     }
 
@@ -162,5 +167,9 @@ impl Config {
     pub fn is_list_all_cmd(&self, cmd: &str) -> bool {
         let all = format!("{}A", self.cmd_list);
         cmd == all || cmd == "--list-all"
+    }
+
+    pub fn is_update_mirrors_cmd(&self, cmd: &str) -> bool {
+        cmd == self.cmd_update_mirrors || cmd == "--update-mirrors"
     }
 }
