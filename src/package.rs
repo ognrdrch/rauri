@@ -6,6 +6,7 @@ use std::fs;
 
 use crate::aur::Aur;
 use crate::config::Config;
+use crate::fix;
 use crate::tracker::PackageTracker;
 use crate::ui::{Ui, Colors};
 use atty::Stream;
@@ -180,7 +181,7 @@ impl PackageManager {
         Ok(())
     }
 
-    pub fn install(package_name: &str, config: &Config) -> Result<()> {
+    pub fn install(package_name: &str, config: &Config, fix_sig: bool) -> Result<()> {
         let check_result = Command::new("pacman")
             .arg("-Si")
             .arg(package_name)
@@ -190,30 +191,13 @@ impl PackageManager {
             Ok(output) if output.status.success() => {
                 Ui::info(&format!("Installing {} from official repositories...", package_name));
 
-                let install_result = Command::new("sudo")
-                    .arg("pacman")
-                    .arg("-S")
-                    .arg("--noconfirm")
-                    .arg(package_name)
-                    .status()
-                    .context("Failed to execute pacman install")?;
-
-                if install_result.success() {
-                    Ui::success(&format!("Installed {} successfully", package_name));
-                } else {
-                    anyhow::bail!("Installation failed");
-                }
+                fix::run_pacman(&["-S", "--noconfirm", package_name], fix_sig)?;
+                Ui::success(&format!("Installed {} successfully", package_name));
             }
             _ => {
                 Ui::info(&format!("Installing {} from AUR...", package_name));
 
-                let aur_url = format!("https://aur.archlinux.org/{}.git", package_name);
-                let package_dir = Aur::clone_repo(&aur_url, &config.download_dir)?;
-                let actual_package_name = Aur::build_and_install(&package_dir, package_name)?;
-
-                if let Err(e) = PackageTracker::add(&actual_package_name) {
-                    Ui::warning(&format!("Failed to track package: {}", e));
-                }
+                let actual_package_name = Self::install_aur(package_name, config, fix_sig)?;
 
                 if actual_package_name != package_name {
                     Ui::success(&format!("Installed {} successfully", package_name));
@@ -223,6 +207,92 @@ impl PackageManager {
             }
         }
 
+        Ok(())
+    }
+
+    /// Clone, build and install an AUR package (by its AUR repo name) and track it.
+    /// If makepkg reports dependencies missing from the official repos, offers to
+    /// build them from the AUR first. Returns the name of the installed package.
+    pub fn install_aur(repo_name: &str, config: &Config, fix_sig: bool) -> Result<String> {
+        Self::build_aur(repo_name, config, fix_sig, false, &mut Vec::new())
+    }
+
+    /// `chain` holds the packages currently being built, to detect dependency cycles.
+    fn build_aur(
+        repo_name: &str,
+        config: &Config,
+        fix_sig: bool,
+        as_dep: bool,
+        chain: &mut Vec<String>,
+    ) -> Result<String> {
+        let aur_url = format!("https://aur.archlinux.org/{}.git", repo_name);
+        let package_dir = Aur::clone_repo(&aur_url, &config.download_dir)?;
+
+        chain.push(repo_name.to_string());
+        let mut result = Aur::build_and_install(&package_dir, repo_name, fix_sig, as_dep);
+        if let Err(e) = &result {
+            if let Some(missing) = e.downcast_ref::<fix::MissingAurDeps>() {
+                let deps = missing.0.clone();
+                result = Self::install_aur_deps(&deps, config, fix_sig, chain)
+                    .and_then(|_| {
+                        Ui::info(&format!("Dependencies installed, building {} again...", repo_name));
+                        Aur::build_and_install(&package_dir, repo_name, fix_sig, as_dep)
+                    });
+            }
+        }
+        chain.pop();
+
+        let installed = result?;
+        if let Err(e) = PackageTracker::add(&installed) {
+            Ui::warning(&format!("Failed to track package: {}", e));
+        }
+        Ok(installed)
+    }
+
+    /// Look up missing dependencies in the AUR and, after confirmation, build them.
+    fn install_aur_deps(deps: &[String], config: &Config, fix_sig: bool, chain: &mut Vec<String>) -> Result<()> {
+        // pacman reports versioned targets like "foo>=1.2"
+        let names: Vec<String> = deps.iter()
+            .map(|d| d.split(|c| c == '<' || c == '>' || c == '=').next().unwrap_or(d).to_string())
+            .collect();
+
+        let mut found = Vec::new();
+        let mut not_found = Vec::new();
+        for name in &names {
+            match Aur::get_package_info(name) {
+                Ok(pkg) => found.push(pkg),
+                Err(_) => not_found.push(name.clone()),
+            }
+        }
+
+        if !not_found.is_empty() {
+            anyhow::bail!(
+                "Dependencies not found in the official repos or the AUR: {}",
+                not_found.join(", ")
+            );
+        }
+
+        if let Some(pkg) = found.iter().find(|p| chain.contains(&p.package_base)) {
+            anyhow::bail!("Dependency cycle: {} -> {}", chain.join(" -> "), pkg.package_base);
+        }
+
+        let parent = chain.last().map(String::as_str).unwrap_or("package");
+        Ui::warning(&format!("{} needs these packages from the AUR: {}", parent, names.join(", ")));
+        if !Ui::confirm("Build and install them from the AUR first?") {
+            anyhow::bail!(
+                "Missing AUR dependencies. Install them first with: rauri -S {}",
+                names.join(" ")
+            );
+        }
+
+        for pkg in &found {
+            if pkg.package_base != pkg.name {
+                Ui::info(&format!("Installing dependency {} (from {})...", pkg.name, pkg.package_base));
+            } else {
+                Ui::info(&format!("Installing dependency {}...", pkg.name));
+            }
+            Self::build_aur(&pkg.package_base, config, fix_sig, true, chain)?;
+        }
         Ok(())
     }
 
@@ -260,46 +330,7 @@ impl PackageManager {
         Ok(())
     }
 
-    /// Run reflector to update the mirrorlist. Skipped if config.update_mirrors is false
-    /// or reflector is not installed.
-    pub fn update_mirrors(config: &Config) -> Result<()> {
-        if !config.update_mirrors {
-            return Ok(());
-        }
-
-        let available = Command::new("which")
-            .arg("reflector")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if !available {
-            Ui::warning("reflector not found — skipping mirror update. Install with: rauri -S reflector");
-            return Ok(());
-        }
-
-        Ui::info("Updating mirrorlist with reflector...");
-        let status = Command::new("sudo")
-            .arg("reflector")
-            .arg("--latest")
-            .arg("20")
-            .arg("--sort")
-            .arg("rate")
-            .arg("--save")
-            .arg("/etc/pacman.d/mirrorlist")
-            .status()
-            .context("Failed to run reflector")?;
-
-        if status.success() {
-            Ui::success("Mirrorlist updated");
-        } else {
-            Ui::warning("Mirror update failed, continuing anyway");
-        }
-
-        Ok(())
-    }
-
-    pub fn update_aur_only(config: &Config) -> Result<()> {
+    pub fn update_aur_only(config: &Config, fix_sig: bool) -> Result<()> {
         Self::cleanup_tracking()?;
 
         let tracked_packages = PackageTracker::load().unwrap_or_default();
@@ -337,13 +368,7 @@ impl PackageManager {
                                 Ui::info(&format!("Updating {} from {} to {}...",
                                     package_name, installed_version, aur_pkg.version));
 
-                                let aur_url = format!("https://aur.archlinux.org/{}.git", package_name);
-                                let package_dir = Aur::clone_repo(&aur_url, &config.download_dir)?;
-                                let actual_package_name = Aur::build_and_install(&package_dir, package_name)?;
-
-                                if let Err(e) = PackageTracker::add(&actual_package_name) {
-                                    Ui::warning(&format!("Failed to track package: {}", e));
-                                }
+                                Self::install_aur(&aur_pkg.package_base, config, fix_sig)?;
                             } else {
                                 Ui::info(&format!("{} is up to date", package_name));
                             }
@@ -364,234 +389,115 @@ impl PackageManager {
     }
 
     /// Update the full system. Pass skip_aur=true to only update official packages.
-    pub fn update_system(config: &Config, skip_aur: bool) -> Result<()> {
+    pub fn update_system(config: &Config, skip_aur: bool, fix_sig: bool) -> Result<()> {
         Ui::info("Updating official packages...");
 
-        let sync_result = Command::new("sudo")
-            .arg("pacman")
-            .arg("-Syy")
-            .status()
-            .context("Failed to sync package databases")?;
-
-        if !sync_result.success() {
-            anyhow::bail!("Failed to sync package databases");
-        }
-
-        let update_result = Command::new("sudo")
-            .arg("pacman")
-            .arg("-Syu")
-            .arg("--noconfirm")
-            .status()
-            .context("Failed to update system packages")?;
-
-        if !update_result.success() {
-            anyhow::bail!("Failed to update system packages");
-        }
+        fix::run_pacman(&["-Syy"], fix_sig)?;
+        fix::run_pacman(&["-Syu", "--noconfirm"], fix_sig)?;
 
         Ui::success("Official packages updated");
 
         if skip_aur {
             Ui::info("Skipping AUR package updates (--skip-aur)");
         } else {
-            Self::update_aur_only(config)?;
+            Self::update_aur_only(config, fix_sig)?;
         }
 
         Ok(())
     }
 
-    pub fn remove(package_name: &str, config: Option<&Config>) -> Result<()> {
-        let config_owned;
-        let config = match config {
-            Some(c) => c,
-            None => {
-                config_owned = Config::load()?;
-                &config_owned
+    /// Remove packages like `pacman -R<flags>` (e.g. flags "s", "ns", "c"), then
+    /// untrack every removed package and delete build folders nothing still needs.
+    pub fn remove(package_names: &[String], flags: &str, config: &Config) -> Result<()> {
+        let mut targets = Vec::new();
+        for name in package_names {
+            let actual = Self::resolve_installed(name)
+                .ok_or_else(|| anyhow::anyhow!("Package '{}' is not installed", name))?;
+            if &actual != name {
+                Ui::info(&format!("{} is installed as {}", name, actual));
             }
-        };
 
-        if package_name.is_empty() {
-            Ui::error("Please provide a package name to remove");
-            return Ok(());
+            let debug = format!("{}-debug", actual);
+            if Self::is_installed(&debug) {
+                targets.push(debug);
+            }
+            targets.push(actual);
         }
 
-        let check_exact = Command::new("pacman")
-            .arg("-Q")
-            .arg(package_name)
-            .output();
+        let before = Self::installed_packages();
 
-        let mut actual_package_name = package_name.to_string();
-        let mut repo_name = package_name.to_string();
+        // No --noconfirm: like pacman, show what -s / -c will take with it and ask.
+        let op = format!("-R{}", flags);
+        let mut args = vec![op.as_str()];
+        args.extend(targets.iter().map(String::as_str));
+        fix::run_pacman(&args, false)?;
 
-        match check_exact {
-            Ok(output) if output.status.success() => {
-                actual_package_name = package_name.to_string();
-            }
-            _ => {
-                if let Ok(tracked) = PackageTracker::load() {
-                    for p in &tracked {
-                        let check = Command::new("pacman")
-                            .arg("-Q")
-                            .arg(p)
-                            .output();
+        let after = Self::installed_packages();
+        let mut removed: Vec<&String> = before.difference(&after).collect();
+        removed.sort();
 
-                        if let Ok(check_output) = check {
-                            if check_output.status.success() {
-                                if p.contains(package_name) || package_name.contains(p.as_str()) {
-                                    actual_package_name = p.clone();
-                                    if config.download_dir.exists() {
-                                        if let Ok(entries) = fs::read_dir(&config.download_dir) {
-                                            for entry in entries.flatten() {
-                                                let path = entry.path();
-                                                if path.is_dir() {
-                                                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                                        if name == p || name == package_name {
-                                                            repo_name = name.to_string();
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+        let tracked = PackageTracker::load().unwrap_or_default();
+        for name in removed.iter().filter(|n| tracked.contains(n.as_str())) {
+            if let Err(e) = PackageTracker::remove(name) {
+                Ui::warning(&format!("Failed to untrack {}: {}", name, e));
             }
         }
 
-        let final_check = Command::new("pacman")
-            .arg("-Q")
-            .arg(&actual_package_name)
-            .output();
+        let removed: HashSet<String> = removed.into_iter().cloned().collect();
+        Self::remove_build_folders(&removed, &after, config);
 
-        if let Ok(output) = final_check {
-            if !output.status.success() {
-                anyhow::bail!("Package '{}' is not installed", package_name);
-            }
-        } else {
-            anyhow::bail!("Package '{}' is not installed", package_name);
-        }
-
-        let remove_result = Command::new("sudo")
-            .arg("pacman")
-            .arg("-R")
-            .arg("--noconfirm")
-            .arg(&actual_package_name)
-            .status()
-            .context("Failed to execute pacman remove")?;
-
-        if !remove_result.success() {
-            anyhow::bail!("Package removal failed");
-        }
-
-        let debug_package_name = format!("{}-debug", actual_package_name);
-        let debug_check = Command::new("pacman")
-            .arg("-Q")
-            .arg(&debug_package_name)
-            .output();
-
-        if let Ok(output) = debug_check {
-            if output.status.success() {
-                if let Err(e) = Command::new("sudo")
-                    .arg("pacman")
-                    .arg("-R")
-                    .arg("--noconfirm")
-                    .arg(&debug_package_name)
-                    .status()
-                {
-                    Ui::warning(&format!("Failed to remove debug package {}: {}", debug_package_name, e));
-                }
-            }
-        }
-
-        let mut packages_to_untrack = HashSet::new();
-        packages_to_untrack.insert(actual_package_name.clone());
-        packages_to_untrack.insert(package_name.to_string());
-
-        if let Ok(tracked) = PackageTracker::load() {
-            for tracked_pkg in &tracked {
-                if tracked_pkg == &actual_package_name || tracked_pkg == package_name {
-                    packages_to_untrack.insert(tracked_pkg.clone());
-                }
-            }
-        }
-
-        for pkg_to_remove in &packages_to_untrack {
-            if let Err(e) = PackageTracker::remove(pkg_to_remove) {
-                Ui::warning(&format!("Failed to untrack package: {}", e));
-            }
-        }
-
-        if config.download_dir.exists() {
-            let mut folder_removed = false;
-
-            if let Ok(entries) = fs::read_dir(&config.download_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() && !folder_removed {
-                        if path.join("PKGBUILD").exists() {
-                            if let Ok(pkg_files) = fs::read_dir(&path) {
-                                for pkg_file in pkg_files.flatten() {
-                                    let pkg_path = pkg_file.path();
-                                    if pkg_path.extension().and_then(|s| s.to_str()) == Some("zst") {
-                                        if let Some(file_name) = pkg_path.file_name().and_then(|n| n.to_str()) {
-                                            if file_name.ends_with(".pkg.tar.zst") {
-                                                let result = Command::new("pacman")
-                                                    .arg("-Qp")
-                                                    .arg(&pkg_path)
-                                                    .output();
-
-                                                if let Ok(output) = result {
-                                                    if output.status.success() {
-                                                        let stdout = String::from_utf8_lossy(&output.stdout);
-                                                        if let Some(pkg_name_from_file) = stdout.trim().split_whitespace().next() {
-                                                            if pkg_name_from_file == actual_package_name ||
-                                                               pkg_name_from_file == package_name {
-                                                                if let Err(e) = fs::remove_dir_all(&path) {
-                                                                    Ui::warning(&format!("Failed to remove package folder {}: {}", path.display(), e));
-                                                                } else {
-                                                                    folder_removed = true;
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !folder_removed {
-                let folder_names_to_try = vec![&repo_name, package_name, &actual_package_name];
-                for folder_name in folder_names_to_try {
-                    let folder_path = config.download_dir.join(folder_name);
-                    if folder_path.exists() && folder_path.is_dir() {
-                        if let Err(e) = fs::remove_dir_all(&folder_path) {
-                            Ui::warning(&format!("Failed to remove package folder {}: {}", folder_path.display(), e));
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
-        let success_msg = if actual_package_name != package_name {
-            format!("Removed {} (was installed as {})", package_name, actual_package_name)
-        } else {
-            format!("Removed {}", package_name)
-        };
-
-        Ui::success(&format!("{} successfully", success_msg));
+        let mut shown: Vec<&str> = removed.iter()
+            .map(String::as_str)
+            .filter(|n| !n.ends_with("-debug"))
+            .collect();
+        shown.sort();
+        Ui::success(&format!("Removed {}", shown.join(", ")));
         Ok(())
+    }
+
+    /// The installed package `name` refers to: itself, or a tracked AUR package whose
+    /// name contains it (or is contained in it), e.g. "foo" -> "foo-git".
+    fn resolve_installed(name: &str) -> Option<String> {
+        if Self::is_installed(name) {
+            return Some(name.to_string());
+        }
+        let mut tracked: Vec<String> = PackageTracker::load().unwrap_or_default().into_iter().collect();
+        tracked.sort();
+        tracked.into_iter()
+            .find(|p| (p.contains(name) || name.contains(p.as_str())) && Self::is_installed(p))
+    }
+
+    fn is_installed(name: &str) -> bool {
+        Command::new("pacman")
+            .arg("-Q")
+            .arg(name)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn installed_packages() -> HashSet<String> {
+        Command::new("pacman")
+            .arg("-Qq")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// Delete build folders that built one of the `removed` packages, unless another
+    /// package from the same folder (split packages) is still installed.
+    fn remove_build_folders(removed: &HashSet<String>, installed: &HashSet<String>, config: &Config) {
+        for folder in Aur::package_folders(&config.download_dir) {
+            let builds = Aur::srcinfo_pkgnames(&folder);
+            let built_removed = builds.iter().any(|n| removed.contains(n));
+            let still_needed = builds.iter().any(|n| installed.contains(n));
+
+            if built_removed && !still_needed {
+                if let Err(e) = fs::remove_dir_all(&folder) {
+                    Ui::warning(&format!("Failed to remove package folder {}: {}", folder.display(), e));
+                }
+            }
+        }
     }
 
     pub fn clear_aur_path() -> Result<()> {

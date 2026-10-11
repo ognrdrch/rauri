@@ -3,6 +3,17 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
 
+/// pacman -R modifiers rauri passes through: recursive, nosave, cascade, unneeded.
+const REMOVE_MODIFIERS: &str = "sncu";
+
+/// Long forms of the remove modifiers, usable together with --remove.
+pub const REMOVE_LONG_MODIFIERS: &[(&str, char)] = &[
+    ("--recursive", 's'),
+    ("--nosave", 'n'),
+    ("--cascade", 'c'),
+    ("--unneeded", 'u'),
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub download_dir: PathBuf,
@@ -12,9 +23,6 @@ pub struct Config {
     /// Max search results shown per source (AUR / official). 0 = unlimited.
     #[serde(default = "default_search_limit")]
     pub search_limit: usize,
-    /// Run reflector to update mirrorlist before system/AUR updates.
-    #[serde(default = "default_update_mirrors")]
-    pub update_mirrors: bool,
     /// Short flag for search (default: -Q). Long form --search always works.
     #[serde(default = "default_cmd_search")]
     pub cmd_search: String,
@@ -30,20 +38,15 @@ pub struct Config {
     /// Short flag for list AUR packages (default: -L). Long form --list always works.
     #[serde(default = "default_cmd_list")]
     pub cmd_list: String,
-    /// Short flag for updating mirrors with reflector (default: -M). Long form --update-mirrors always works.
-    #[serde(default = "default_cmd_update_mirrors")]
-    pub cmd_update_mirrors: String,
 }
 
 fn default_use_color() -> bool { true }
 fn default_search_limit() -> usize { 15 }
-fn default_update_mirrors() -> bool { true }
 fn default_cmd_search() -> String { "-Q".to_string() }
 fn default_cmd_install() -> String { "-S".to_string() }
 fn default_cmd_update_all() -> String { "-Syu".to_string() }
 fn default_cmd_remove() -> String { "-R".to_string() }
 fn default_cmd_list() -> String { "-L".to_string() }
-fn default_cmd_update_mirrors() -> String { "-M".to_string() }
 
 impl Config {
     pub fn default() -> Self {
@@ -53,13 +56,11 @@ impl Config {
             use_color: true,
             editor: None,
             search_limit: default_search_limit(),
-            update_mirrors: default_update_mirrors(),
             cmd_search: default_cmd_search(),
             cmd_install: default_cmd_install(),
             cmd_update_all: default_cmd_update_all(),
             cmd_remove: default_cmd_remove(),
             cmd_list: default_cmd_list(),
-            cmd_update_mirrors: default_cmd_update_mirrors(),
         }
     }
 
@@ -155,8 +156,18 @@ impl Config {
         cmd == self.cmd_update_all || cmd == "--update-all"
     }
 
-    pub fn is_remove_cmd(&self, cmd: &str) -> bool {
-        cmd == self.cmd_remove || cmd == "--remove"
+    /// Matches the remove flag, optionally followed by pacman's remove modifiers
+    /// (e.g. -Rs, -Rns, -Rsc), or --remove. Returns the modifier letters.
+    pub fn remove_flags(&self, cmd: &str) -> Option<String> {
+        if cmd == "--remove" {
+            return Some(String::new());
+        }
+        let modifiers = cmd.strip_prefix(self.cmd_remove.as_str())?;
+        if modifiers.chars().all(|c| REMOVE_MODIFIERS.contains(c)) {
+            Some(modifiers.to_string())
+        } else {
+            None
+        }
     }
 
     pub fn is_list_cmd(&self, cmd: &str) -> bool {
@@ -168,8 +179,21 @@ impl Config {
         let all = format!("{}A", self.cmd_list);
         cmd == all || cmd == "--list-all"
     }
+}
 
-    pub fn is_update_mirrors_cmd(&self, cmd: &str) -> bool {
-        cmd == self.cmd_update_mirrors || cmd == "--update-mirrors"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_remove_modifiers() {
+        let config = Config::default();
+        assert_eq!(config.remove_flags("-R").as_deref(), Some(""));
+        assert_eq!(config.remove_flags("--remove").as_deref(), Some(""));
+        assert_eq!(config.remove_flags("-Rs").as_deref(), Some("s"));
+        assert_eq!(config.remove_flags("-Rns").as_deref(), Some("ns"));
+        assert_eq!(config.remove_flags("-Rsc").as_deref(), Some("sc"));
+        assert_eq!(config.remove_flags("-Rdd"), None);
+        assert_eq!(config.remove_flags("-S"), None);
     }
 }

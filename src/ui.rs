@@ -58,6 +58,29 @@ impl Ui {
         }
     }
 
+    /// Ask a yes/no question (default yes). Answers no when stdin isn't a terminal.
+    pub fn confirm(question: &str) -> bool {
+        use std::io::Write;
+
+        if !atty::is(Stream::Stdin) {
+            Self::warning(&format!("{} — no terminal to ask, assuming no", question));
+            return false;
+        }
+
+        if Self::is_tty() {
+            print!("{} {} [Y/n] ", "?".bright_magenta(), question.bold());
+        } else {
+            print!("? {} [Y/n] ", question);
+        }
+        std::io::stdout().flush().ok();
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            return false;
+        }
+        matches!(input.trim().to_lowercase().as_str(), "" | "y" | "yes")
+    }
+
     pub fn print_help(config: &crate::config::Config) {
         let is_tty = Self::is_tty();
 
@@ -75,11 +98,13 @@ impl Ui {
         if is_tty {
             println!("{}", "Options:".bold());
             println!("  {}  Clear AUR download directory before command", "-C".yellow());
-            println!("  {}  Set AUR download directory path", "-P <path>".yellow());
+            println!("  {}  Set AUR download directory path (offers to move existing packages)", "-P <path>".yellow());
+            println!("  {}  Fix signature/keyring problems without asking", "--fix-sig".yellow());
         } else {
             println!("Options:");
             println!("  -C          Clear AUR download directory before command");
-            println!("  -P <path>   Set AUR download directory path");
+            println!("  -P <path>   Set AUR download directory path (offers to move existing packages)");
+            println!("  --fix-sig   Fix signature/keyring problems without asking");
         }
 
         if is_tty {
@@ -98,7 +123,6 @@ impl Ui {
         let r = &config.cmd_remove;
         let l = &config.cmd_list;
         let la = format!("{}A", l);
-        let m = &config.cmd_update_mirrors;
         let lim = config.search_limit;
 
         if is_tty {
@@ -115,10 +139,10 @@ impl Ui {
                 format!("{u}, --update-all").yellow());
             println!("  {}  Update official packages only (skip AUR)",
                 format!("{u} --skip-aur, --update-all --skip-aur").yellow());
-            println!("  {}  Update mirrorlist with reflector",
-                format!("{m}, --update-mirrors").yellow());
-            println!("  {}  Remove package (also removes package folder)",
-                format!("{r}, --remove <pkg>").yellow());
+            println!("  {}  Remove packages and their build folders",
+                format!("{r}, --remove <pkg>...").yellow());
+            println!("  {}  Remove with pacman modifiers: s recursive, n nosave, c cascade, u unneeded",
+                format!("{r}s, {r}ns, {r}sc ...").yellow());
             println!("  {}  List AUR packages installed via rauri",
                 format!("{l}, --list").yellow());
             println!("  {}  List all installed system packages",
@@ -133,8 +157,8 @@ impl Ui {
             println!("  {i}, --update-aur                     Update AUR packages only");
             println!("  {u}, --update-all                     Update whole system (pacman -Syy then -Syu, then AUR)");
             println!("  {u} --skip-aur, --update-all --skip-aur  Update official packages only");
-            println!("  {m}, --update-mirrors                 Update mirrorlist with reflector");
-            println!("  {r}, --remove <pkg>                   Remove package");
+            println!("  {r}, --remove <pkg>...                Remove packages and their build folders");
+            println!("  {r}s, {r}ns, {r}sc ...                    Remove with pacman modifiers (s, n, c, u)");
             println!("  {l}, --list                           List AUR packages installed via rauri");
             println!("  {la}, --list-all                       List all installed system packages");
             println!("  <AUR_URL>                             Install from AUR git link");
@@ -151,8 +175,9 @@ impl Ui {
         println!("  rauri {u}");
         println!("  rauri {u} --skip-aur");
         println!("  rauri --update-aur");
-        println!("  rauri {m}");
+        println!("  rauri {i} --fix-sig package-name  # Refresh keyring / import PGP keys first");
         println!("  rauri {r} package-name");
+        println!("  rauri {r}ns package-name  # Also remove unneeded dependencies and config backups");
         println!("  rauri {l}");
         println!("  rauri {la}");
         println!("  rauri -C -{l}  # Clear AUR path then list packages");

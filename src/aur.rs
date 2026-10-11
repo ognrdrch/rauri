@@ -2,12 +2,15 @@ use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct AurPackage {
     pub name: String,
+    /// The AUR git repo name; differs from `name` for split packages.
+    pub package_base: String,
     pub version: String,
     pub description: Option<String>,
     #[allow(dead_code)]
@@ -25,6 +28,8 @@ struct AurSearchResponse {
 struct AurPackageJson {
     #[serde(rename = "Name")]
     name: String,
+    #[serde(rename = "PackageBase")]
+    package_base: Option<String>,
     #[serde(rename = "Version")]
     version: String,
     #[serde(rename = "Description")]
@@ -89,16 +94,39 @@ impl Aur {
         Ok(target_dir)
     }
 
-    pub fn build_and_install(package_dir: &Path, requested_package: &str) -> Result<String> {
-        let output = Command::new("makepkg")
-            .arg("-si")
-            .current_dir(package_dir)
-            .status()
-            .context("Failed to execute makepkg")?;
-        
-        if !output.success() {
-            anyhow::bail!("makepkg -si failed");
+    /// Subdirectories of `dir` that contain a PKGBUILD.
+    pub fn package_folders(dir: &Path) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+        let mut folders: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("PKGBUILD").is_file())
+            .collect();
+        folders.sort();
+        folders
+    }
+
+    /// Package names a folder builds, read from .SRCINFO (several for split packages).
+    /// Falls back to the folder name, since sourcing the PKGBUILD would run its code.
+    pub fn srcinfo_pkgnames(folder: &Path) -> Vec<String> {
+        let names: Vec<String> = fs::read_to_string(folder.join(".SRCINFO"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pkgname = "))
+            .map(|name| name.trim().to_string())
+            .collect();
+
+        if names.is_empty() {
+            folder.file_name()
+                .map(|n| vec![n.to_string_lossy().into_owned()])
+                .unwrap_or_default()
+        } else {
+            names
         }
+    }
+
+    pub fn build_and_install(package_dir: &Path, requested_package: &str, fix_sig: bool, as_dep: bool) -> Result<String> {
+        crate::fix::run_makepkg(package_dir, fix_sig, as_dep)?;
         
         // Find what package was actually installed
         let mut actual_package_name = requested_package.to_string();
@@ -147,6 +175,7 @@ impl Aur {
         
         let packages: Vec<AurPackage> = json_data.results.into_iter().map(|pkg| {
             AurPackage {
+                package_base: pkg.package_base.unwrap_or_else(|| pkg.name.clone()),
                 name: pkg.name,
                 version: pkg.version,
                 description: pkg.description,
@@ -172,6 +201,7 @@ impl Aur {
         if let Some(pkg) = json_data.results.first() {
             Ok(AurPackage {
                 name: pkg.name.clone(),
+                package_base: pkg.package_base.clone().unwrap_or_else(|| pkg.name.clone()),
                 version: pkg.version.clone(),
                 description: pkg.description.clone(),
                 votes: pkg.num_votes.unwrap_or(0),

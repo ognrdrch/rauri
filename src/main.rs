@@ -7,6 +7,8 @@ mod tracker;
 mod aur;
 mod ui;
 mod package;
+mod fix;
+mod migrate;
 
 use config::Config;
 use package::PackageManager;
@@ -26,8 +28,9 @@ fn run() -> Result<()> {
     // Extract global flags before any other processing
     let clear_aur_path = args.contains(&"-C".to_string());
     let skip_aur = args.contains(&"--skip-aur".to_string());
+    let fix_sig = args.contains(&"--fix-sig".to_string());
     let mut args: Vec<String> = args.into_iter()
-        .filter(|a| a != "-C" && a != "--skip-aur")
+        .filter(|a| a != "-C" && a != "--skip-aur" && a != "--fix-sig")
         .collect();
 
     // Check for -P flag (set AUR path)
@@ -91,9 +94,7 @@ fn run() -> Result<()> {
             std::process::exit(1);
         }
 
-        config.download_dir = expanded_path.clone();
-        config.save()?;
-        Ui::success(&format!("AUR download path set to: {}", expanded_path.display()));
+        migrate::change_aur_path(&mut config, &expanded_path)?;
         return Ok(());
     }
 
@@ -104,6 +105,7 @@ fn run() -> Result<()> {
         config.download_dir = download_dir.clone();
         config.save()?;
         Ui::success(&format!("Configuration saved to {}", Config::config_path().display()));
+        migrate::adopt_untracked(&download_dir)?;
     }
 
     config.ensure_download_dir()
@@ -120,7 +122,7 @@ fn run() -> Result<()> {
 
     // AUR URL shortcut
     if !args.is_empty() && Aur::is_aur_url(&args[0]) {
-        handle_aur_url(&args[0], &config)?;
+        handle_aur_url(&args[0], &config, fix_sig)?;
         return Ok(());
     }
 
@@ -142,24 +144,29 @@ fn run() -> Result<()> {
         let limit = if config.search_limit == 0 { None } else { Some(config.search_limit) };
         PackageManager::search(&args[1], limit)?;
     } else if config.is_install_cmd(&command) && has_pkg {
-        PackageManager::install(&args[1], &config)?;
+        PackageManager::install(&args[1], &config, fix_sig)?;
     } else if config.is_install_cmd(&command) || command == "--update-aur" {
         // -S with no package arg, or explicit --update-aur
-        PackageManager::update_aur_only(&config)?;
+        PackageManager::update_aur_only(&config, fix_sig)?;
     } else if config.is_update_all_cmd(&command) {
-        PackageManager::update_system(&config, skip_aur)?;
-    } else if config.is_remove_cmd(&command) {
-        if !has_pkg {
+        PackageManager::update_system(&config, skip_aur, fix_sig)?;
+    } else if let Some(mut flags) = config.remove_flags(&command) {
+        let mut packages = Vec::new();
+        for arg in &args[1..] {
+            match config::REMOVE_LONG_MODIFIERS.iter().find(|(long, _)| long == arg) {
+                Some((_, short)) => flags.push(*short),
+                None => packages.push(arg.clone()),
+            }
+        }
+        if packages.is_empty() {
             Ui::error("Please provide a package name to remove");
             std::process::exit(1);
         }
-        PackageManager::remove(&args[1], Some(&config))?;
+        PackageManager::remove(&packages, &flags, &config)?;
     } else if config.is_list_all_cmd(&command) {
         PackageManager::list_all()?;
     } else if config.is_list_cmd(&command) {
         PackageManager::list_installed()?;
-    } else if config.is_update_mirrors_cmd(&command) {
-        PackageManager::update_mirrors(&config)?;
     } else {
         Ui::error(&format!("Unknown command: {}", command));
         Ui::print_help(&config);
@@ -169,14 +176,9 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn handle_aur_url(url: &str, config: &Config) -> Result<()> {
+fn handle_aur_url(url: &str, config: &Config, fix_sig: bool) -> Result<()> {
     let package_name = Aur::extract_package_name(url)?;
-    let package_dir = Aur::clone_repo(url, &config.download_dir)?;
-    let actual_package_name = Aur::build_and_install(&package_dir, &package_name)?;
-
-    if let Err(e) = tracker::PackageTracker::add(&actual_package_name) {
-        Ui::warning(&format!("Failed to track package: {}", e));
-    }
+    let actual_package_name = PackageManager::install_aur(&package_name, config, fix_sig)?;
 
     if actual_package_name != package_name {
         Ui::success(&format!("Installed {} successfully", package_name));
