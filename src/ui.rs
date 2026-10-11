@@ -125,43 +125,37 @@ impl Ui {
         let la = format!("{}A", l);
         let lim = config.search_limit;
 
+        let commands: Vec<(String, String)> = vec![
+            (format!("{s}, --search <pkg>"), format!("Search packages (top {lim} per repo)")),
+            (format!("{sa}, --search-all <pkg>"), "Search packages (show all results)".into()),
+            (format!("{i}, --install <pkg>"), "Install package (AUR or official)".into()),
+            (format!("{i}, --update-aur"), "Update AUR packages only".into()),
+            (format!("{u}, --update-all"), "Update whole system (pacman -Syy then -Syu, then AUR)".into()),
+            (format!("{u} --skip-aur"), "Update official packages only (skip AUR)".into()),
+            (format!("{r}, --remove <pkg>..."), "Remove packages and their build folders (asks first)".into()),
+            (format!("{r}s, --recursive"), "...also remove dependencies nothing else needs".into()),
+            (format!("{r}n, --nosave"), "...also delete config backups (.pacsave)".into()),
+            (format!("{r}c, --cascade"), "...also remove packages that depend on them".into()),
+            (format!("{r}u, --unneeded"), "...only remove packages nothing depends on".into()),
+            (format!("{r}ns, {r}sc, ..."), "Modifiers combine in any order, like pacman".into()),
+            (format!("{l}, --list"), "List AUR packages installed via rauri".into()),
+            (format!("{la}, --list-all"), "List all installed system packages".into()),
+            ("<AUR_URL>".into(), "Install from AUR git link".into()),
+        ];
+        let width = commands.iter().map(|(usage, _)| usage.len()).max().unwrap_or(0);
+
         if is_tty {
             println!("{}", "Commands:".bold());
-            println!("  {}  Search packages (top {} per repo)",
-                format!("{s}, --search <pkg>").yellow(), lim);
-            println!("  {}  Search packages (show all results)",
-                format!("{sa}, --search-all <pkg>").yellow());
-            println!("  {}  Install package (AUR or official)",
-                format!("{i}, --install <pkg>").yellow());
-            println!("  {}  Update AUR packages only",
-                format!("{i}, --update-aur").yellow());
-            println!("  {}  Update whole system (pacman -Syy then -Syu, then AUR)",
-                format!("{u}, --update-all").yellow());
-            println!("  {}  Update official packages only (skip AUR)",
-                format!("{u} --skip-aur, --update-all --skip-aur").yellow());
-            println!("  {}  Remove packages and their build folders",
-                format!("{r}, --remove <pkg>...").yellow());
-            println!("  {}  Remove with pacman modifiers: s recursive, n nosave, c cascade, u unneeded",
-                format!("{r}s, {r}ns, {r}sc ...").yellow());
-            println!("  {}  List AUR packages installed via rauri",
-                format!("{l}, --list").yellow());
-            println!("  {}  List all installed system packages",
-                format!("{la}, --list-all").yellow());
-            println!("  {}  Install from AUR git link",
-                "<AUR_URL>".yellow());
         } else {
             println!("Commands:");
-            println!("  {s}, --search <pkg>                   Search packages (top {lim} per repo)");
-            println!("  {sa}, --search-all <pkg>               Search packages (show all results)");
-            println!("  {i}, --install <pkg>                  Install package (AUR or official)");
-            println!("  {i}, --update-aur                     Update AUR packages only");
-            println!("  {u}, --update-all                     Update whole system (pacman -Syy then -Syu, then AUR)");
-            println!("  {u} --skip-aur, --update-all --skip-aur  Update official packages only");
-            println!("  {r}, --remove <pkg>...                Remove packages and their build folders");
-            println!("  {r}s, {r}ns, {r}sc ...                    Remove with pacman modifiers (s, n, c, u)");
-            println!("  {l}, --list                           List AUR packages installed via rauri");
-            println!("  {la}, --list-all                       List all installed system packages");
-            println!("  <AUR_URL>                             Install from AUR git link");
+        }
+        for (usage, description) in &commands {
+            let padded = format!("{:width$}", usage);
+            if is_tty {
+                println!("  {}  {}", padded.yellow(), description);
+            } else {
+                println!("  {}  {}", padded, description);
+            }
         }
 
         if is_tty {

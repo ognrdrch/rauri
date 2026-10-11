@@ -5,6 +5,9 @@ on:
     types: [created]
   workflow_dispatch:  # Allows manual trigger from Actions tab
 
+permissions:
+  contents: write  # needed to attach the binary to the release
+
 jobs:
   build:
     runs-on: ubuntu-latest 
@@ -41,7 +44,7 @@ jobs:
       
       - name: Upload binary to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: rauri-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
         env:
