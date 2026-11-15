@@ -17,22 +17,22 @@ makepkg -si
 
 ```bash
 Commands
- rauri -Q <package>     # Search AUR & Official Packages
- rauri -QA <package>    # Search, showing all results
- rauri -S <package>     # Install AUR & Official Packages
- rauri -S               # Update AUR packages only
- rauri -Syu             # Update whole system (pacman -Syy then -Syu, then AUR)
- rauri -Syu --skip-aur  # Update official packages only
- rauri -R <package>...  # Remove AUR & Official Packages
- rauri -Rs <package>    # ...and their unneeded dependencies (like pacman -Rs)
- rauri -Rns <package>   # ...and also their config backups (like pacman -Rns)
- rauri -L               # List installed AUR Packages
- rauri -LA              # List all installed system packages
- rauri <AUR_URL>        # Install from an AUR git link
+ rauri -Q <package>        # Search AUR & Official Packages
+ rauri -QA <package>       # Search, showing all results
+ rauri -S <package>        # Install AUR & Official Packages
+ rauri -Syu                # Update official packages (pacman -Syu)
+ rauri -Syu --update-aur   # Update official packages, then AUR packages
+ rauri --update-aur        # Update AUR packages only
+ rauri -R <package>...     # Remove AUR & Official Packages
+ rauri -Rs <package>       # ...and their unneeded dependencies (like pacman -Rs)
+ rauri -Rns <package>      # ...and also their config backups (like pacman -Rns)
+ rauri -L                  # List installed AUR Packages
+ rauri -LA                 # List all installed system packages
+ rauri <AUR_URL>           # Install from an AUR git link
 Options    
- rauri -P <path>        # Set download directory
- rauri -C               # Clear AUR Downloads 
- rauri --fix-sig        # Fix keyring / missing PGP keys without asking
+ rauri -P <path>           # Set download directory
+ rauri -C                  # Clear AUR Downloads 
+ rauri --fix-sig           # Fix keyring / missing PGP keys without asking
 ```
 
 ## Removing packages
@@ -67,7 +67,7 @@ it explains the problem and asks before fixing it, then retries the original com
 
 | Problem | What rauri does |
 |---|---|
-| Package signature errors (outdated keyring) | Offers to run `pacman -Sy --needed archlinux-keyring` and `pacman -Su`. If that fails, offers to re-initialise the keyring with `pacman-key --init` and `--populate archlinux` |
+| Package signature errors (outdated keyring) | If your synced databases already have a newer keyring, offers to install just that (`pacman -S --needed archlinux-keyring`, no system upgrade). Otherwise offers `pacman -Sy --needed archlinux-keyring` followed by `pacman -Su` (skipped when the failed command was already `-Syu`, since the retry upgrades). If that fails, offers to re-initialise the keyring with `pacman-key --init` and `--populate archlinux` |
 | AUR source signed by an unknown PGP key | Offers to import the key with `gpg --recv-keys`, falling back to `keyserver.ubuntu.com` |
 | AUR package needs other AUR packages | Looks the dependencies up in the AUR and offers to build and install them first (as dependencies), then builds the package again. Works recursively and stops on dependency cycles |
 | pacman database locked | If no pacman process is running, offers to remove the leftover `/var/lib/pacman/db.lck` |

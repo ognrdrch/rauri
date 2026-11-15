@@ -177,7 +177,9 @@ fn pacman_cmd(args: &[&str]) -> Command {
 /// Run `sudo pacman <args>`, offering fixes for recognised failures.
 pub fn run_pacman(args: &[&str], fix_sig: bool) -> Result<()> {
     let label = format!("pacman {}", args.join(" "));
-    run_with_fixes(&label, || run_captured(pacman_cmd(args)), fix_sig)
+    // A retried -Su/-Syu upgrades the system itself, so fixes don't need to.
+    let upgrades = args.iter().any(|a| a.starts_with("-S") && a.contains('u'));
+    run_with_fixes(&label, || run_captured(pacman_cmd(args)), fix_sig, upgrades)
 }
 
 /// Run `makepkg -si` in `package_dir`, offering fixes for recognised failures.
@@ -195,7 +197,7 @@ pub fn run_makepkg(package_dir: &Path, fix_sig: bool, as_dep: bool) -> Result<()
 
     // Only use a pseudo-terminal when there is a terminal to show colours on.
     if atty::is(Stream::Stdout) {
-        return run_with_fixes(command_line, || run_in_pty(command_line, package_dir), fix_sig);
+        return run_with_fixes(command_line, || run_in_pty(command_line, package_dir), fix_sig, false);
     }
 
     run_with_fixes(command_line, || {
@@ -204,13 +206,15 @@ pub fn run_makepkg(package_dir: &Path, fix_sig: bool, as_dep: bool) -> Result<()
             .current_dir(package_dir)
             .env("LC_ALL", "C");
         run_captured(cmd)
-    }, fix_sig)
+    }, fix_sig, false)
 }
 
+/// `upgrades`: the command being retried is a system upgrade (`-Su`/`-Syu`).
 fn run_with_fixes(
     label: &str,
     run: impl Fn() -> Result<(bool, String)>,
     fix_sig: bool,
+    upgrades: bool,
 ) -> Result<()> {
     // Each kind of fix is attempted at most once, so a fix that doesn't help can't loop.
     let mut attempted: HashSet<Discriminant<Failure>> = HashSet::new();
@@ -235,7 +239,7 @@ fn run_with_fixes(
             anyhow::bail!("{} failed", label);
         }
 
-        if !offer_fix(&failure, fix_sig)? {
+        if !offer_fix(&failure, fix_sig, upgrades)? {
             print_hint(&failure);
             anyhow::bail!("{} failed", label);
         }
@@ -245,14 +249,30 @@ fn run_with_fixes(
 }
 
 /// Returns true if a fix was applied and the command should be retried.
-fn offer_fix(failure: &Failure, fix_sig: bool) -> Result<bool> {
+fn offer_fix(failure: &Failure, fix_sig: bool, upgrades: bool) -> Result<bool> {
     match failure {
         Failure::Signature => {
             Ui::warning("Package signature verification failed — your archlinux-keyring is probably outdated.");
-            if fix_sig || Ui::confirm(
-                "Update archlinux-keyring and upgrade the system (pacman -Sy archlinux-keyring, then pacman -Su)?",
-            ) {
-                refresh_keyring()?;
+            // A newer keyring in the already-synced databases can be installed on its own:
+            // no database refresh, so no partial upgrade and no full system upgrade needed.
+            if keyring_upgradable() {
+                if fix_sig || Ui::confirm(
+                    "Install the newer archlinux-keyring (pacman -S archlinux-keyring, no system upgrade)?",
+                ) {
+                    install_keyring()?;
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            // Otherwise the databases must be refreshed, and after -Sy the system has to be
+            // upgraded (-Su) too, since Arch doesn't support partial upgrades.
+            let prompt = if upgrades {
+                "Refresh the databases and update archlinux-keyring (pacman -Sy archlinux-keyring), then continue the upgrade?"
+            } else {
+                "Your package databases are out of date too. Refresh them, update archlinux-keyring and upgrade the system (pacman -Sy archlinux-keyring, then pacman -Su)?"
+            };
+            if fix_sig || Ui::confirm(prompt) {
+                refresh_keyring(!upgrades)?;
                 return Ok(true);
             }
             Ok(false)
@@ -323,7 +343,29 @@ fn print_hint(failure: &Failure) {
     Ui::info(&hint);
 }
 
-fn refresh_keyring() -> Result<()> {
+/// True if the synced databases already have a newer archlinux-keyring than the installed one.
+fn keyring_upgradable() -> bool {
+    Command::new("pacman")
+        .args(["-Qu", "archlinux-keyring"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Install archlinux-keyring from the current databases, without refreshing them.
+fn install_keyring() -> Result<()> {
+    Ui::info("Updating archlinux-keyring...");
+    let (ok, _) = run_captured(pacman_cmd(&["-S", "--needed", "--noconfirm", "archlinux-keyring"]))?;
+    if !ok {
+        anyhow::bail!("Failed to update archlinux-keyring");
+    }
+    Ui::success("Keyring updated");
+    Ok(())
+}
+
+/// Refresh the databases and update archlinux-keyring. With `upgrade`, also run
+/// `pacman -Su` afterwards so the system isn't left partially upgraded.
+fn refresh_keyring(upgrade: bool) -> Result<()> {
     Ui::info("Updating archlinux-keyring...");
     let (ok, _) = run_captured(pacman_cmd(&["-Sy", "--needed", "--noconfirm", "archlinux-keyring"]))?;
 
@@ -349,10 +391,12 @@ fn refresh_keyring() -> Result<()> {
         }
     }
 
-    Ui::info("Upgrading system with the new keyring...");
-    let (ok, _) = run_captured(pacman_cmd(&["-Su", "--noconfirm"]))?;
-    if !ok {
-        anyhow::bail!("System upgrade after keyring update failed");
+    if upgrade {
+        Ui::info("Upgrading system with the new keyring...");
+        let (ok, _) = run_captured(pacman_cmd(&["-Su", "--noconfirm"]))?;
+        if !ok {
+            anyhow::bail!("System upgrade after keyring update failed");
+        }
     }
 
     Ui::success("Keyring updated");

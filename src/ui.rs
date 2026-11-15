@@ -129,9 +129,9 @@ impl Ui {
             (format!("{s}, --search <pkg>"), format!("Search packages (top {lim} per repo)")),
             (format!("{sa}, --search-all <pkg>"), "Search packages (show all results)".into()),
             (format!("{i}, --install <pkg>"), "Install package (AUR or official)".into()),
-            (format!("{i}, --update-aur"), "Update AUR packages only".into()),
-            (format!("{u}, --update-all"), "Update whole system (pacman -Syy then -Syu, then AUR)".into()),
-            (format!("{u} --skip-aur"), "Update official packages only (skip AUR)".into()),
+                        (format!("{u}, --update-all"), "Update official packages (pacman -Syu)".into()),
+            (format!("{u} --update-aur"), "Update official packages, then AUR packages".into()),
+            ("--update-aur".into(), "Update AUR packages only".into()),
             (format!("{r}, --remove <pkg>..."), "Remove packages and their build folders (asks first)".into()),
             (format!("{r}s, --recursive"), "...also remove dependencies nothing else needs".into()),
             (format!("{r}n, --nosave"), "...also delete config backups (.pacsave)".into()),
@@ -167,7 +167,7 @@ impl Ui {
         println!("  rauri {sa} package-name");
         println!("  rauri {i} package-name");
         println!("  rauri {u}");
-        println!("  rauri {u} --skip-aur");
+        println!("  rauri {u} --update-aur");
         println!("  rauri --update-aur");
         println!("  rauri {i} --fix-sig package-name  # Refresh keyring / import PGP keys first");
         println!("  rauri {r} package-name");

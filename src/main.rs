@@ -27,10 +27,10 @@ fn run() -> Result<()> {
 
     // Extract global flags before any other processing
     let clear_aur_path = args.contains(&"-C".to_string());
-    let skip_aur = args.contains(&"--skip-aur".to_string());
+    let update_aur = args.contains(&"--update-aur".to_string());
     let fix_sig = args.contains(&"--fix-sig".to_string());
     let mut args: Vec<String> = args.into_iter()
-        .filter(|a| a != "-C" && a != "--skip-aur" && a != "--fix-sig")
+        .filter(|a| a != "-C" && a != "--update-aur" && a != "--fix-sig")
         .collect();
 
     // Check for -P flag (set AUR path)
@@ -115,6 +115,12 @@ fn run() -> Result<()> {
         PackageManager::clear_aur_path()?;
     }
 
+    // --update-aur on its own updates just the AUR packages
+    if args.is_empty() && update_aur {
+        PackageManager::update_aur_only(&config, fix_sig)?;
+        return Ok(());
+    }
+
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         Ui::print_help(&config);
         return Ok(());
@@ -145,11 +151,11 @@ fn run() -> Result<()> {
         PackageManager::search(&args[1], limit)?;
     } else if config.is_install_cmd(&command) && has_pkg {
         PackageManager::install(&args[1], &config, fix_sig)?;
-    } else if config.is_install_cmd(&command) || command == "--update-aur" {
-        // -S with no package arg, or explicit --update-aur
-        PackageManager::update_aur_only(&config, fix_sig)?;
+    } else if config.is_install_cmd(&command) {
+        Ui::error("Please provide a package name to install (use --update-aur to update AUR packages)");
+        std::process::exit(1);
     } else if config.is_update_all_cmd(&command) {
-        PackageManager::update_system(&config, skip_aur, fix_sig)?;
+        PackageManager::update_system(&config, update_aur, fix_sig)?;
     } else if let Some(mut flags) = config.remove_flags(&command) {
         let mut packages = Vec::new();
         for arg in &args[1..] {

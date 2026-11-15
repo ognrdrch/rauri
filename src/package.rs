@@ -388,18 +388,15 @@ impl PackageManager {
         Ok(())
     }
 
-    /// Update the full system. Pass skip_aur=true to only update official packages.
-    pub fn update_system(config: &Config, skip_aur: bool, fix_sig: bool) -> Result<()> {
+    /// Update official packages. Pass update_aur=true to also update AUR packages.
+    pub fn update_system(config: &Config, update_aur: bool, fix_sig: bool) -> Result<()> {
         Ui::info("Updating official packages...");
 
-        fix::run_pacman(&["-Syy"], fix_sig)?;
         fix::run_pacman(&["-Syu", "--noconfirm"], fix_sig)?;
 
         Ui::success("Official packages updated");
 
-        if skip_aur {
-            Ui::info("Skipping AUR package updates (--skip-aur)");
-        } else {
+        if update_aur {
             Self::update_aur_only(config, fix_sig)?;
         }
 
