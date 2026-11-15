@@ -174,7 +174,7 @@ impl Ui {
         println!("  rauri {r}ns package-name  # Also remove unneeded dependencies and config backups");
         println!("  rauri {l}");
         println!("  rauri {la}");
-        println!("  rauri -C -{l}  # Clear AUR path then list packages");
+        println!("  rauri -C {l}  # Clear AUR path then list packages");
         println!("  rauri -P ~/.AUR  # Set AUR path to ~/.AUR");
         println!("  rauri https://aur.archlinux.org/package-name.git");
 

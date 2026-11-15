@@ -43,6 +43,8 @@ struct AurPackageJson {
 // Reusable HTTP client to avoid creating a new one for each request
 static HTTP_CLIENT: Lazy<reqwest::blocking::Client> = Lazy::new(|| {
     reqwest::blocking::Client::builder()
+        // The AUR answers requests without a User-Agent with a bot-check HTML page.
+        .user_agent(concat!("rauri/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("Failed to create HTTP client")
