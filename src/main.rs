@@ -172,10 +172,16 @@ fn run() -> Result<()> {
             std::process::exit(1);
         }
         PackageManager::remove(&packages, &flags, &config)?;
-    } else if config.is_list_all_cmd(&command) {
-        PackageManager::list_all()?;
+    } else if config.is_list_all_cmd(&command)
+        || (config.is_list_cmd(&command) && args.get(1).is_some_and(|a| a == "--all"))
+    {
+        PackageManager::list_all(&config)?;
+    } else if config.is_exclude_cmd(&command) {
+        PackageManager::exclude(&args[1..], &mut config)?;
+    } else if config.is_include_cmd(&command) {
+        PackageManager::include(&args[1..], &mut config)?;
     } else if config.is_list_cmd(&command) {
-        PackageManager::list_installed()?;
+        PackageManager::list_installed(&config)?;
     } else {
         Ui::error(&format!("Unknown command: {}", command));
         Ui::print_help(&config);

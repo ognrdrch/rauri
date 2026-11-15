@@ -124,6 +124,8 @@ impl Ui {
         let r = &config.cmd_remove;
         let l = &config.cmd_list;
         let la = format!("{}A", l);
+        let e = &config.cmd_exclude;
+        let inc = &config.cmd_include;
         let lim = config.search_limit;
 
         let commands: Vec<(String, String)> = vec![
@@ -141,7 +143,9 @@ impl Ui {
             (format!("{r}u, --unneeded"), "...only remove packages nothing depends on".into()),
             (format!("{r}ns, {r}sc, ..."), "Modifiers combine in any order, like pacman".into()),
             (format!("{l}, --list"), "List AUR packages installed via rauri".into()),
-            (format!("{la}, --list-all"), "List all installed system packages".into()),
+            (format!("{la}, {l} --all, --list-all"), "List all installed packages, outdated first".into()),
+            (format!("{e}, --exclude [pkg]..."), "Exclude packages from updates (no pkg: show excluded)".into()),
+            (format!("{inc}, --include [pkg]..."), "Include excluded packages again (no pkg: show excluded)".into()),
             ("<AUR_URL>".into(), "Install from AUR git link".into()),
         ];
         let width = commands.iter().map(|(usage, _)| usage.len()).max().unwrap_or(0);
@@ -179,6 +183,8 @@ impl Ui {
         println!("  rauri {r}ns package-name  # Also remove unneeded dependencies and config backups");
         println!("  rauri {l}");
         println!("  rauri {la}");
+        println!("  rauri {e} package-name  # Skip package-name during updates");
+        println!("  rauri {inc} package-name  # Update package-name again");
         println!("  rauri -C {l}  # Clear AUR path then list packages");
         println!("  rauri -P ~/.AUR  # Set AUR path to ~/.AUR");
         println!("  rauri https://aur.archlinux.org/package-name.git");

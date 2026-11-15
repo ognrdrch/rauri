@@ -38,6 +38,15 @@ pub struct Config {
     /// Short flag for list AUR packages (default: -L). Long form --list always works.
     #[serde(default = "default_cmd_list")]
     pub cmd_list: String,
+    /// Short flag for excluding packages from updates (default: -E). Long form --exclude always works.
+    #[serde(default = "default_cmd_exclude")]
+    pub cmd_exclude: String,
+    /// Short flag for including excluded packages again (default: -I). Long form --include always works.
+    #[serde(default = "default_cmd_include")]
+    pub cmd_include: String,
+    /// Packages (official or AUR) skipped by -Syu / -Syyu / --update-aur.
+    #[serde(default)]
+    pub excluded: Vec<String>,
 }
 
 fn default_use_color() -> bool { true }
@@ -47,6 +56,8 @@ fn default_cmd_install() -> String { "-S".to_string() }
 fn default_cmd_update_all() -> String { "-Syu".to_string() }
 fn default_cmd_remove() -> String { "-R".to_string() }
 fn default_cmd_list() -> String { "-L".to_string() }
+fn default_cmd_exclude() -> String { "-E".to_string() }
+fn default_cmd_include() -> String { "-I".to_string() }
 
 impl Config {
     pub fn default() -> Self {
@@ -61,6 +72,9 @@ impl Config {
             cmd_update_all: default_cmd_update_all(),
             cmd_remove: default_cmd_remove(),
             cmd_list: default_cmd_list(),
+            cmd_exclude: default_cmd_exclude(),
+            cmd_include: default_cmd_include(),
+            excluded: Vec::new(),
         }
     }
 
@@ -182,6 +196,14 @@ impl Config {
 
     pub fn is_list_cmd(&self, cmd: &str) -> bool {
         cmd == self.cmd_list || cmd == "--list"
+    }
+
+    pub fn is_exclude_cmd(&self, cmd: &str) -> bool {
+        cmd == self.cmd_exclude || cmd == "--exclude"
+    }
+
+    pub fn is_include_cmd(&self, cmd: &str) -> bool {
+        cmd == self.cmd_include || cmd == "--include"
     }
 
     /// Short flag with "A" appended, or --list-all — lists all system packages.

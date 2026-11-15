@@ -350,7 +350,15 @@ impl PackageManager {
             return Ok(());
         }
 
+        let mut base_packages: Vec<String> = base_packages.into_iter().collect();
+        base_packages.sort();
+
         for package_name in &base_packages {
+            if config.excluded.contains(package_name) {
+                Ui::info(&format!("Skipping {} (excluded)", package_name));
+                continue;
+            }
+
             let installed_result = Command::new("pacman")
                 .arg("-Q")
                 .arg(package_name)
@@ -394,7 +402,13 @@ impl PackageManager {
         Ui::info("Updating official packages...");
 
         let flag = if refresh { "-Syyu" } else { "-Syu" };
-        fix::run_pacman(&[flag, "--noconfirm"], fix_sig)?;
+        let mut args = vec![flag, "--noconfirm"];
+        let ignore = config.excluded.join(",");
+        if !config.excluded.is_empty() {
+            Ui::info(&format!("Skipping excluded packages: {}", config.excluded.join(", ")));
+            args.extend(["--ignore", ignore.as_str()]);
+        }
+        fix::run_pacman(&args, fix_sig)?;
 
         Ui::success("Official packages updated");
 
@@ -564,7 +578,7 @@ impl PackageManager {
 
     /// List AUR packages tracked by rauri, from the tracking file rather than the
     /// download directory, so the list survives that folder being wiped or moved.
-    pub fn list_installed() -> Result<()> {
+    pub fn list_installed(config: &Config) -> Result<()> {
         let mut names: Vec<String> = PackageTracker::load()
             .unwrap_or_default()
             .into_iter()
@@ -618,6 +632,9 @@ impl PackageManager {
             if aur.is_some() && aur_pkg.is_none() {
                 line.push_str(if is_tty { "  \x1b[2m(not in AUR)\x1b[0m" } else { "  (not in AUR)" });
             }
+            if config.excluded.contains(name) {
+                line.push_str(if is_tty { "  \x1b[2m(excluded)\x1b[0m" } else { "  (excluded)" });
+            }
 
             match aur_pkg.filter(|p| &p.package_base != name) {
                 Some(p) if is_tty => println!("  {}{}{} → {}", Colors::BOLD, p.package_base.yellow(), Colors::RESET, line),
@@ -638,49 +655,186 @@ impl PackageManager {
         Ok(())
     }
 
-    /// List all installed system packages (AUR + official) via pacman -Q.
-    pub fn list_all() -> Result<()> {
-        let is_tty = atty::is(Stream::Stdout);
-
+    /// List all installed packages (official + AUR), outdated ones first.
+    pub fn list_all(config: &Config) -> Result<()> {
         let output = Command::new("pacman")
             .arg("-Q")
             .output()
             .context("Failed to run pacman -Q")?;
-
         if !output.status.success() {
             anyhow::bail!("Failed to list installed packages");
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let packages: Vec<(&str, &str)> = stdout.lines()
-            .filter_map(|line| {
-                let mut parts = line.splitn(2, ' ');
-                let name = parts.next()?;
-                let version = parts.next()?;
-                Some((name, version))
-            })
-            .collect();
-
-        if packages.is_empty() {
+        let installed = parse_name_version(&String::from_utf8_lossy(&output.stdout));
+        if installed.is_empty() {
             Ui::info("No packages installed.");
             return Ok(());
         }
 
-        if is_tty {
-            println!("\n{}", format!("All Installed Packages ({}):", packages.len()).cyan().bold());
-        } else {
-            println!("\nAll Installed Packages ({}):", packages.len());
+        // name -> newer version available
+        let mut updates: std::collections::HashMap<String, String> = Self::official_updates();
+
+        // Foreign packages (not in any repo): compare against the AUR.
+        let foreign: Vec<String> = Command::new("pacman")
+            .arg("-Qmq")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_string).collect())
+            .unwrap_or_default();
+        let foreign_set: HashSet<&String> = foreign.iter().collect();
+        match Aur::get_packages_info(&foreign) {
+            Ok(aur) => {
+                for (name, version) in &installed {
+                    if let Some(pkg) = aur.get(name) {
+                        if &pkg.version != version {
+                            updates.insert(name.clone(), pkg.version.clone());
+                        }
+                    }
+                }
+            }
+            Err(e) => Ui::warning(&format!("Could not reach the AUR, not checking AUR packages: {}", e)),
         }
 
-        for (name, version) in &packages {
-            if is_tty {
-                println!("  {} {}", name.bold(), version.green());
+        let is_tty = atty::is(Stream::Stdout);
+        let tag = |name: &String| {
+            let mut tags = String::new();
+            if foreign_set.contains(name) {
+                tags.push_str(" [aur]");
+            }
+            if config.excluded.contains(name) {
+                tags.push_str(" (excluded)");
+            }
+            if is_tty && !tags.is_empty() {
+                format!("{}{}{}", Colors::DIM, tags, Colors::RESET)
             } else {
-                println!("  {} {}", name, version);
+                tags
+            }
+        };
+        let heading = |text: String| {
+            if is_tty {
+                println!("\n{}", text.cyan().bold());
+            } else {
+                println!("\n{}", text);
+            }
+        };
+
+        let (outdated, current): (Vec<_>, Vec<_>) = installed.iter()
+            .partition(|(name, _)| updates.contains_key(name));
+
+        if !outdated.is_empty() {
+            heading(format!("Updates available ({}):", outdated.len()));
+            for (name, version) in &outdated {
+                let new = &updates[name];
+                if is_tty {
+                    println!("  {} {} → {}{}", name.bold(), version.yellow(), new.green(), tag(name));
+                } else {
+                    println!("  {} {} -> {}{}", name, version, new, tag(name));
+                }
             }
         }
 
+        heading(format!("Up to date ({}):", current.len()));
+        for (name, version) in &current {
+            if is_tty {
+                println!("  {} {}{}", name.bold(), version.green(), tag(name));
+            } else {
+                println!("  {} {}{}", name, version, tag(name));
+            }
+        }
+
+        if !outdated.is_empty() {
+            heading(format!("{} of {} packages have updates available", outdated.len(), installed.len()));
+        }
         Ok(())
+    }
+
+    /// Pending official updates as name -> new version. Uses `checkupdates`
+    /// (pacman-contrib), which checks against freshly synced databases without
+    /// root; falls back to `pacman -Qu` against the system databases.
+    fn official_updates() -> std::collections::HashMap<String, String> {
+        let parse = |out: &[u8]| -> std::collections::HashMap<String, String> {
+            String::from_utf8_lossy(out)
+                .lines()
+                .filter_map(|l| {
+                    let mut parts = l.split_whitespace();
+                    let name = parts.next()?;
+                    let _old = parts.next()?;
+                    let _arrow = parts.next()?;
+                    let new = parts.next()?;
+                    Some((name.to_string(), new.to_string()))
+                })
+                .collect()
+        };
+
+        match Command::new("checkupdates").output() {
+            // checkupdates exits 0 with updates, 2 with none, 1 on error.
+            Ok(o) if o.status.code() == Some(0) => return parse(&o.stdout),
+            Ok(o) if o.status.code() == Some(2) => return Default::default(),
+            Ok(_) => Ui::warning("checkupdates failed; using the local package databases, which may be out of date"),
+            Err(_) => Ui::warning("checkupdates not found (pacman-contrib); using the local package databases, which may be out of date"),
+        }
+
+        Command::new("pacman")
+            .arg("-Qu")
+            .output()
+            .map(|o| parse(&o.stdout))
+            .unwrap_or_default()
+    }
+
+    /// Exclude packages from -Syu / -Syyu / --update-aur, then show the list.
+    pub fn exclude(names: &[String], config: &mut Config) -> Result<()> {
+        let mut changed = false;
+        for name in names {
+            if config.excluded.contains(name) {
+                Ui::info(&format!("{} is already excluded", name));
+                continue;
+            }
+            if !Self::is_installed(name) {
+                Ui::warning(&format!("{} is not installed; excluding it anyway", name));
+            }
+            config.excluded.push(name.clone());
+            changed = true;
+            Ui::success(&format!("Excluded {} from updates", name));
+        }
+        if changed {
+            config.excluded.sort();
+            config.save()?;
+        }
+        Self::print_excluded(config);
+        Ok(())
+    }
+
+    /// Include excluded packages in updates again, then show the list.
+    pub fn include(names: &[String], config: &mut Config) -> Result<()> {
+        let mut changed = false;
+        for name in names {
+            if let Some(i) = config.excluded.iter().position(|e| e == name) {
+                config.excluded.remove(i);
+                changed = true;
+                Ui::success(&format!("{} will be updated again", name));
+            } else {
+                Ui::warning(&format!("{} is not excluded", name));
+            }
+        }
+        if changed {
+            config.save()?;
+        }
+        Self::print_excluded(config);
+        Ok(())
+    }
+
+    fn print_excluded(config: &Config) {
+        if config.excluded.is_empty() {
+            Ui::info("No packages are excluded from updates.");
+            return;
+        }
+        let is_tty = atty::is(Stream::Stdout);
+        if is_tty {
+            println!("\n{}", format!("Excluded from updates ({}):", config.excluded.len()).cyan().bold());
+        } else {
+            println!("\nExcluded from updates ({}):", config.excluded.len());
+        }
+        for name in &config.excluded {
+            println!("  {}", name);
+        }
     }
 }
 
@@ -732,4 +886,11 @@ mod tests {
         remove_dir_force(&root).unwrap();
         assert!(!root.exists());
     }
+}
+
+/// Parse `pacman -Q` style "name version" lines.
+fn parse_name_version(out: &str) -> Vec<(String, String)> {
+    out.lines()
+        .filter_map(|l| l.split_once(' ').map(|(n, v)| (n.to_string(), v.to_string())))
+        .collect()
 }

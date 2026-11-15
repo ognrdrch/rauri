@@ -28,7 +28,10 @@ Commands
  rauri -Rs <package>       # ...and their unneeded dependencies (like pacman -Rs)
  rauri -Rns <package>      # ...and also their config backups (like pacman -Rns)
  rauri -L                  # List installed AUR Packages
- rauri -LA                 # List all installed system packages
+ rauri -LA                 # List all installed packages, outdated first (also: -L --all)
+ rauri -E <package>...     # Exclude packages from -Syu / -Syyu / --update-aur
+ rauri -E                  # Show excluded packages
+ rauri -I <package>...     # Include excluded packages in updates again
  rauri <AUR_URL>           # Install from an AUR git link
 Options    
  rauri -P <path>           # Set download directory
