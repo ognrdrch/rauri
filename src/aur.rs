@@ -189,6 +189,38 @@ impl Aur {
         Ok(packages)
     }
 
+    /// Look up several packages in one AUR request, keyed by package name.
+    /// Packages that aren't in the AUR are simply missing from the map.
+    pub fn get_packages_info(names: &[String]) -> Result<std::collections::HashMap<String, AurPackage>> {
+        let mut found = std::collections::HashMap::new();
+        // Keep URLs well under the AUR's length limit.
+        for chunk in names.chunks(100) {
+            let mut url = "https://aur.archlinux.org/rpc/?v=5&type=info".to_string();
+            for name in chunk {
+                url.push_str("&arg[]=");
+                url.push_str(&urlencoding::encode(name));
+            }
+
+            let json_data: AurSearchResponse = HTTP_CLIENT.get(&url)
+                .send()
+                .context("Failed to send info request")?
+                .json()
+                .context("Failed to parse info response")?;
+
+            for pkg in json_data.results {
+                found.insert(pkg.name.clone(), AurPackage {
+                    package_base: pkg.package_base.unwrap_or_else(|| pkg.name.clone()),
+                    name: pkg.name,
+                    version: pkg.version,
+                    description: pkg.description,
+                    votes: pkg.num_votes.unwrap_or(0),
+                    popularity: pkg.popularity.unwrap_or(0.0),
+                });
+            }
+        }
+        Ok(found)
+    }
+
     pub fn get_package_info(package_name: &str) -> Result<AurPackage> {
         let url = format!("https://aur.archlinux.org/rpc/?v=5&type=info&arg={}", 
                          urlencoding::encode(package_name));

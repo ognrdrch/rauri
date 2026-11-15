@@ -388,11 +388,13 @@ impl PackageManager {
         Ok(())
     }
 
-    /// Update official packages. Pass update_aur=true to also update AUR packages.
-    pub fn update_system(config: &Config, update_aur: bool, fix_sig: bool) -> Result<()> {
+    /// Update official packages. Pass update_aur=true to also update AUR packages,
+    /// refresh=true to force re-downloading the package databases (pacman -Syyu).
+    pub fn update_system(config: &Config, update_aur: bool, refresh: bool, fix_sig: bool) -> Result<()> {
         Ui::info("Updating official packages...");
 
-        fix::run_pacman(&["-Syu", "--noconfirm"], fix_sig)?;
+        let flag = if refresh { "-Syyu" } else { "-Syu" };
+        fix::run_pacman(&[flag, "--noconfirm"], fix_sig)?;
 
         Ui::success("Official packages updated");
 
@@ -534,129 +536,76 @@ impl PackageManager {
         Ok(())
     }
 
-    /// List AUR packages tracked and installed via rauri.
+    /// List AUR packages tracked by rauri, from the tracking file rather than the
+    /// download directory, so the list survives that folder being wiped or moved.
     pub fn list_installed() -> Result<()> {
-        let config = Config::load()?;
-        let download_dir = &config.download_dir;
+        let mut names: Vec<String> = PackageTracker::load()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| !p.ends_with("-debug"))
+            .collect();
+        names.sort();
 
-        if !download_dir.exists() {
-            Ui::info("No AUR packages found in download directory.");
+        if names.is_empty() {
+            Ui::info("No AUR packages tracked by rauri.");
             return Ok(());
         }
 
-        let mut packages: Vec<(String, String, String)> = Vec::new();
+        // One pacman call: it prints the installed ones and errors about the rest.
+        let installed: std::collections::HashMap<String, String> = Command::new("pacman")
+            .arg("-Q")
+            .args(&names)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| l.split_once(' ').map(|(n, v)| (n.to_string(), v.to_string())))
+                .collect())
+            .unwrap_or_default();
 
-        if let Ok(entries) = fs::read_dir(download_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let repo_name = path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    if path.join("PKGBUILD").exists() {
-                        let mut pkg_name = repo_name.clone();
-                        let mut installed_packages: Vec<(String, String)> = Vec::new();
-
-                        if let Ok(pkg_files) = fs::read_dir(&path) {
-                            for pkg_file in pkg_files.flatten() {
-                                let pkg_path = pkg_file.path();
-                                if pkg_path.extension().and_then(|s| s.to_str()) == Some("zst") {
-                                    if let Some(file_name) = pkg_path.file_name().and_then(|n| n.to_str()) {
-                                        if file_name.ends_with(".pkg.tar.zst") && !file_name.ends_with("-debug.pkg.tar.zst") {
-                                            let result = Command::new("pacman")
-                                                .arg("-Qp")
-                                                .arg(&pkg_path)
-                                                .output();
-
-                                            if let Ok(output) = result {
-                                                if output.status.success() {
-                                                    let stdout = String::from_utf8_lossy(&output.stdout);
-                                                    let parts: Vec<&str> = stdout.trim().split_whitespace().collect();
-                                                    if parts.len() >= 2 {
-                                                        let file_pkg_name = parts[0];
-
-                                                        let check_result = Command::new("pacman")
-                                                            .arg("-Q")
-                                                            .arg(file_pkg_name)
-                                                            .output();
-
-                                                        if let Ok(check_output) = check_result {
-                                                            if check_output.status.success() {
-                                                                let installed_stdout = String::from_utf8_lossy(&check_output.stdout);
-                                                                let installed_parts: Vec<&str> = installed_stdout.trim().split_whitespace().collect();
-                                                                if installed_parts.len() >= 2 {
-                                                                    let installed_version = installed_parts[1];
-                                                                    installed_packages.push((file_pkg_name.to_string(), installed_version.to_string()));
-
-                                                                    if !file_pkg_name.ends_with("-debug") && pkg_name == repo_name {
-                                                                        pkg_name = file_pkg_name.to_string();
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if let Some(main_pkg) = installed_packages.iter()
-                            .find(|p| !p.0.ends_with("-debug"))
-                            .or_else(|| installed_packages.first())
-                        {
-                            packages.push((repo_name, main_pkg.0.clone(), main_pkg.1.clone()));
-                        }
-                    }
-                }
-            }
-        }
-
-        if packages.is_empty() {
-            Ui::info("No AUR packages found in download directory.");
+        if installed.is_empty() {
+            Ui::info("No AUR packages installed via rauri.");
             return Ok(());
         }
 
-        let mut outdated = HashSet::new();
-        for (_, pkg_name, installed_version) in &packages {
-            if installed_version.contains("(not installed)") {
-                continue;
+        // Only ask the AUR about packages that are actually installed.
+        names.retain(|n| installed.contains_key(n));
+
+        let aur = match Aur::get_packages_info(&names) {
+            Ok(found) => Some(found),
+            Err(e) => {
+                Ui::warning(&format!("Could not reach the AUR, not checking for updates: {}", e));
+                None
             }
-            if let Ok(aur_pkg) = Aur::get_package_info(pkg_name) {
-                let clean_version = installed_version.replace(" (not installed)", "");
-                if clean_version != aur_pkg.version {
-                    outdated.insert(pkg_name.clone());
-                }
-            }
-        }
+        };
 
         let is_tty = atty::is(Stream::Stdout);
-        for (repo_name, pkg_name, version) in &packages {
-            let is_outdated = outdated.contains(pkg_name);
-            let formatted = Ui::format_package(pkg_name, version, is_outdated);
+        let mut outdated = 0;
+        for name in &names {
+            let aur_pkg = aur.as_ref().and_then(|a| a.get(name));
+            let version = &installed[name];
 
-            if repo_name != pkg_name {
-                if is_tty {
-                    println!("  {}{}{} → {}", Colors::BOLD, repo_name.yellow(), Colors::RESET, formatted);
-                } else {
-                    println!("  {} → {}", repo_name, formatted);
-                }
-            } else {
-                println!("  {}", formatted);
+            let is_outdated = aur_pkg.is_some_and(|p| &p.version != version);
+            if is_outdated {
+                outdated += 1;
+            }
+            let mut line = Ui::format_package(name, version, is_outdated);
+            if aur.is_some() && aur_pkg.is_none() {
+                line.push_str(if is_tty { "  \x1b[2m(not in AUR)\x1b[0m" } else { "  (not in AUR)" });
+            }
+
+            match aur_pkg.filter(|p| &p.package_base != name) {
+                Some(p) if is_tty => println!("  {}{}{} → {}", Colors::BOLD, p.package_base.yellow(), Colors::RESET, line),
+                Some(p) => println!("  {} → {}", p.package_base, line),
+                None => println!("  {}", line),
             }
         }
 
-        if !outdated.is_empty() {
+        if outdated > 0 {
+            let msg = format!("{} packages have updates available", outdated);
             if is_tty {
-                println!("\n{}{}{}", Colors::BOLD,
-                    format!("{} packages have updates available", outdated.len()).yellow(),
-                    Colors::RESET);
+                println!("\n{}{}{}", Colors::BOLD, msg.yellow(), Colors::RESET);
             } else {
-                println!("\n{} packages have updates available", outdated.len());
+                println!("\n{}", msg);
             }
         }
 

@@ -29,8 +29,9 @@ fn run() -> Result<()> {
     let clear_aur_path = args.contains(&"-C".to_string());
     let update_aur = args.contains(&"--update-aur".to_string());
     let fix_sig = args.contains(&"--fix-sig".to_string());
+    let refresh = args.contains(&"--refresh".to_string());
     let mut args: Vec<String> = args.into_iter()
-        .filter(|a| a != "-C" && a != "--update-aur" && a != "--fix-sig")
+        .filter(|a| a != "-C" && a != "--update-aur" && a != "--fix-sig" && a != "--refresh")
         .collect();
 
     // Check for -P flag (set AUR path)
@@ -155,7 +156,9 @@ fn run() -> Result<()> {
         Ui::error("Please provide a package name to install (use --update-aur to update AUR packages)");
         std::process::exit(1);
     } else if config.is_update_all_cmd(&command) {
-        PackageManager::update_system(&config, update_aur, fix_sig)?;
+        PackageManager::update_system(&config, update_aur, refresh, fix_sig)?;
+    } else if config.is_update_all_refresh_cmd(&command) {
+        PackageManager::update_system(&config, update_aur, true, fix_sig)?;
     } else if let Some(mut flags) = config.remove_flags(&command) {
         let mut packages = Vec::new();
         for arg in &args[1..] {

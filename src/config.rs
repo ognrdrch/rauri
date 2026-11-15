@@ -156,6 +156,16 @@ impl Config {
         cmd == self.cmd_update_all || cmd == "--update-all"
     }
 
+    /// The update-all short flag with its first 'y' doubled (default: -Syyu), which
+    /// forces pacman to re-download the package databases. None if the flag has no 'y'.
+    pub fn update_all_refresh_flag(&self) -> Option<String> {
+        self.cmd_update_all.contains('y').then(|| self.cmd_update_all.replacen('y', "yy", 1))
+    }
+
+    pub fn is_update_all_refresh_cmd(&self, cmd: &str) -> bool {
+        self.update_all_refresh_flag().is_some_and(|flag| cmd == flag)
+    }
+
     /// Matches the remove flag, optionally followed by pacman's remove modifiers
     /// (e.g. -Rs, -Rns, -Rsc), or --remove. Returns the modifier letters.
     pub fn remove_flags(&self, cmd: &str) -> Option<String> {
@@ -195,5 +205,20 @@ mod tests {
         assert_eq!(config.remove_flags("-Rsc").as_deref(), Some("sc"));
         assert_eq!(config.remove_flags("-Rdd"), None);
         assert_eq!(config.remove_flags("-S"), None);
+    }
+
+    #[test]
+    fn matches_update_all_refresh() {
+        let mut config = Config::default();
+        assert!(config.is_update_all_refresh_cmd("-Syyu"));
+        assert!(!config.is_update_all_refresh_cmd("-Syu"));
+        assert!(!config.is_update_all_cmd("-Syyu"));
+
+        config.cmd_update_all = "-U".to_string();
+        assert_eq!(config.update_all_refresh_flag(), None);
+        assert!(!config.is_update_all_refresh_cmd("-Uu"));
+
+        config.cmd_update_all = "-Uy".to_string();
+        assert!(config.is_update_all_refresh_cmd("-Uyy"));
     }
 }

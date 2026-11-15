@@ -22,6 +22,7 @@ Commands
  rauri -S <package>        # Install AUR & Official Packages
  rauri -Syu                # Update official packages (pacman -Syu)
  rauri -Syu --update-aur   # Update official packages, then AUR packages
+ rauri -Syyu               # Force-refresh databases, then update (also: -Syu --refresh)
  rauri --update-aur        # Update AUR packages only
  rauri -R <package>...     # Remove AUR & Official Packages
  rauri -Rs <package>       # ...and their unneeded dependencies (like pacman -Rs)

@@ -120,6 +120,7 @@ impl Ui {
         let sa = format!("{}A", s);
         let i = &config.cmd_install;
         let u = &config.cmd_update_all;
+        let uy = config.update_all_refresh_flag().map(|f| format!("{f}, ")).unwrap_or_default();
         let r = &config.cmd_remove;
         let l = &config.cmd_list;
         let la = format!("{}A", l);
@@ -129,7 +130,8 @@ impl Ui {
             (format!("{s}, --search <pkg>"), format!("Search packages (top {lim} per repo)")),
             (format!("{sa}, --search-all <pkg>"), "Search packages (show all results)".into()),
             (format!("{i}, --install <pkg>"), "Install package (AUR or official)".into()),
-                        (format!("{u}, --update-all"), "Update official packages (pacman -Syu)".into()),
+            (format!("{u}, --update-all"), "Update official packages (pacman -Syu)".into()),
+            (format!("{uy}{u} --refresh"), "...force-refresh package databases first (pacman -Syyu)".into()),
             (format!("{u} --update-aur"), "Update official packages, then AUR packages".into()),
             ("--update-aur".into(), "Update AUR packages only".into()),
             (format!("{r}, --remove <pkg>..."), "Remove packages and their build folders (asks first)".into()),
@@ -168,6 +170,9 @@ impl Ui {
         println!("  rauri {i} package-name");
         println!("  rauri {u}");
         println!("  rauri {u} --update-aur");
+        if let Some(f) = config.update_all_refresh_flag() {
+            println!("  rauri {f} --update-aur  # Force-refresh databases first");
+        }
         println!("  rauri --update-aur");
         println!("  rauri {i} --fix-sig package-name  # Refresh keyring / import PGP keys first");
         println!("  rauri {r} package-name");
