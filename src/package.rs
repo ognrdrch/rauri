@@ -492,13 +492,16 @@ impl PackageManager {
             let still_needed = builds.iter().any(|n| installed.contains(n));
 
             if built_removed && !still_needed {
-                if let Err(e) = fs::remove_dir_all(&folder) {
+                if let Err(e) = remove_dir_force(&folder) {
                     Ui::warning(&format!("Failed to remove package folder {}: {}", folder.display(), e));
                 }
             }
         }
     }
 
+    /// Delete every package folder in the AUR download directory. Lists them and
+    /// asks first; folders that need root (e.g. root-owned build files) are offered
+    /// to `sudo rm -rf` afterwards.
     pub fn clear_aur_path() -> Result<()> {
         let config = Config::load()?;
         let download_dir = &config.download_dir;
@@ -508,27 +511,50 @@ impl PackageManager {
             return Ok(());
         }
 
-        let dirs_to_remove: Vec<PathBuf> = fs::read_dir(download_dir)?
+        let mut dirs_to_remove: Vec<PathBuf> = fs::read_dir(download_dir)?
             .flatten()
             .filter(|e| e.path().is_dir())
             .map(|e| e.path())
             .collect();
+        dirs_to_remove.sort();
 
         if dirs_to_remove.is_empty() {
             Ui::info("AUR download directory is already empty.");
             return Ok(());
         }
 
-        Ui::warning(&format!("This will remove {} package folder(s) from {}",
+        Ui::warning(&format!("This will remove {} package folder(s) from {}:",
             dirs_to_remove.len(), download_dir.display()));
-        Ui::info("Removing package folders...");
+        for folder in &dirs_to_remove {
+            println!("  {}", folder.file_name().and_then(|n| n.to_str()).unwrap_or("?"));
+        }
+        if !Ui::confirm("Remove these folders?") {
+            Ui::info("Nothing removed.");
+            return Ok(());
+        }
 
         let mut removed_count = 0;
+        let mut failed = Vec::new();
         for folder in &dirs_to_remove {
-            if let Err(e) = fs::remove_dir_all(folder) {
-                Ui::warning(&format!("Failed to remove {}: {}", folder.display(), e));
+            match remove_dir_force(folder) {
+                Ok(()) => removed_count += 1,
+                Err(e) => {
+                    Ui::warning(&format!("Failed to remove {}: {}", folder.display(), e));
+                    failed.push(folder.clone());
+                }
+            }
+        }
+
+        if !failed.is_empty() && Ui::confirm(&format!("Remove the {} remaining folder(s) with sudo?", failed.len())) {
+            let status = Command::new("sudo")
+                .args(["rm", "-rf", "--"])
+                .args(&failed)
+                .status()
+                .context("Failed to run sudo rm")?;
+            if status.success() {
+                removed_count += failed.len();
             } else {
-                removed_count += 1;
+                Ui::warning("sudo rm failed; some folders were not removed");
             }
         }
 
@@ -655,5 +681,55 @@ impl PackageManager {
         }
 
         Ok(())
+    }
+}
+
+/// Delete a directory tree. If that is refused, give the owner back rwx on every
+/// directory inside and try again: makepkg leaves `pkg/` as `d--x--x--x`, which
+/// blocks deletion even though the user owns it.
+fn remove_dir_force(path: &std::path::Path) -> std::io::Result<()> {
+    match fs::remove_dir_all(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            make_dirs_owner_writable(path);
+            fs::remove_dir_all(path)
+        }
+        result => result,
+    }
+}
+
+fn make_dirs_owner_writable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    // symlink_metadata: never follow links out of the folder.
+    let Ok(meta) = fs::symlink_metadata(path) else { return };
+    if !meta.is_dir() {
+        return;
+    }
+    let mut perms = meta.permissions();
+    perms.set_mode(perms.mode() | 0o700);
+    let _ = fs::set_permissions(path, perms);
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            make_dirs_owner_writable(&entry.path());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn removes_makepkg_locked_pkg_dir() {
+        let root = std::env::temp_dir().join(format!("rauri-test-{}", std::process::id()));
+        let pkg = root.join("pkg").join("foo");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("file"), "x").unwrap();
+        fs::set_permissions(root.join("pkg"), fs::Permissions::from_mode(0o111)).unwrap();
+
+        remove_dir_force(&root).unwrap();
+        assert!(!root.exists());
     }
 }
