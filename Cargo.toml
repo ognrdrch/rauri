@@ -1,6 +1,6 @@
 [package]
 name = "rauri"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["https://github.com/ognrdrch"]
 description = "A minimal AUR helper for Arch Linux "
@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ["aur", "helper", "archlinux", "package-manager","aurhelper"]
 categories = ["command-line-utilities", "development-tools"]
 repository = "https://github.com/ognrdrch/rauri"  
+include = ["src/**/*", "Cargo.lock", "LICENSE", "README.md"]
 
 [[bin]]
 name = "rauri"

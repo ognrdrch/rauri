@@ -17,8 +17,7 @@ use ui::Ui;
 
 fn main() {
     if let Err(e) = run() {
-        Ui::error(&format!("Error: {}", e));
-        std::process::exit(1);
+        usage_error(&format!("Error: {:#}", e));
     }
 }
 
@@ -38,18 +37,16 @@ fn run() -> Result<()> {
     let mut aur_path: Option<PathBuf> = None;
     if let Some(p_index) = args.iter().position(|a| a == "-P") {
         if p_index + 1 >= args.len() {
-            Ui::error("Please provide a path after -P");
-            std::process::exit(1);
+            usage_error("Please provide a path after -P");
         }
 
         let potential_path = &args[p_index + 1];
 
         if potential_path.starts_with('-') {
-            Ui::error(&format!(
+            usage_error(&format!(
                 "Invalid path: '{}'. Did you mean to use a command? Use -P with a valid directory path.",
                 potential_path
             ));
-            std::process::exit(1);
         }
 
         aur_path = Some(PathBuf::from(potential_path));
@@ -80,19 +77,17 @@ fn run() -> Result<()> {
             })?;
 
         if expanded_path.exists() && expanded_path.is_file() {
-            Ui::error(&format!(
+            usage_error(&format!(
                 "Path '{}' exists but is a file, not a directory",
                 expanded_path.display()
             ));
-            std::process::exit(1);
         }
 
         std::fs::create_dir_all(&expanded_path)
             .context("Failed to create directory")?;
 
         if !expanded_path.is_dir() {
-            Ui::error(&format!("Failed to create directory: {}", expanded_path.display()));
-            std::process::exit(1);
+            usage_error(&format!("Failed to create directory: {}", expanded_path.display()));
         }
 
         migrate::change_aur_path(&mut config, &expanded_path)?;
@@ -122,7 +117,16 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
+    if args.is_empty() {
+        // -C on its own: the folders are cleared, nothing else to do.
+        if !clear_aur_path {
+            Ui::no_arguments();
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if args[0] == "-h" || args[0] == "--help" {
         Ui::print_help(&config);
         return Ok(());
     }
@@ -138,14 +142,12 @@ fn run() -> Result<()> {
 
     if config.is_search_all_cmd(&command) {
         if !has_pkg {
-            Ui::error("Please provide a package name to search");
-            std::process::exit(1);
+            usage_error("Please provide a package name to search");
         }
         PackageManager::search(&args[1], None)?;
     } else if config.is_search_cmd(&command) {
         if !has_pkg {
-            Ui::error("Please provide a package name to search");
-            std::process::exit(1);
+            usage_error("Please provide a package name to search");
         }
         // 0 in config means unlimited
         let limit = if config.search_limit == 0 { None } else { Some(config.search_limit) };
@@ -153,8 +155,7 @@ fn run() -> Result<()> {
     } else if config.is_install_cmd(&command) && has_pkg {
         PackageManager::install(&args[1], &config, fix_sig)?;
     } else if config.is_install_cmd(&command) {
-        Ui::error("Please provide a package name to install (use --update-aur to update AUR packages)");
-        std::process::exit(1);
+        usage_error("Please provide a package name to install (use --update-aur to update AUR packages)");
     } else if config.is_update_all_cmd(&command) {
         PackageManager::update_system(&config, update_aur, refresh, fix_sig)?;
     } else if config.is_update_all_refresh_cmd(&command) {
@@ -168,14 +169,12 @@ fn run() -> Result<()> {
             }
         }
         if packages.is_empty() {
-            Ui::error("Please provide a package name to remove");
-            std::process::exit(1);
+            usage_error("Please provide a package name to remove");
         }
         PackageManager::remove(&packages, &flags, &config)?;
-    } else if config.is_list_all_cmd(&command)
-        || (config.is_list_cmd(&command) && args.get(1).is_some_and(|a| a == "--all"))
-    {
-        PackageManager::list_all(&config)?;
+    } else if config.is_list_all_cmd(&command) {
+        let all_official = args.get(1).is_some_and(|a| a == "--all");
+        PackageManager::list_all(&config, all_official)?;
     } else if config.is_exclude_cmd(&command) {
         PackageManager::exclude(&args[1..], &mut config)?;
     } else if config.is_include_cmd(&command) {
@@ -183,12 +182,17 @@ fn run() -> Result<()> {
     } else if config.is_list_cmd(&command) {
         PackageManager::list_installed(&config)?;
     } else {
-        Ui::error(&format!("Unknown command: {}", command));
-        Ui::print_help(&config);
-        std::process::exit(1);
+        usage_error(&format!("Unknown command: {}", command));
     }
 
     Ok(())
+}
+
+/// Report a mistyped or incomplete command and point to the help.
+fn usage_error(msg: &str) -> ! {
+    Ui::error(msg);
+    Ui::help_hint();
+    std::process::exit(1);
 }
 
 fn handle_aur_url(url: &str, config: &Config, fix_sig: bool) -> Result<()> {

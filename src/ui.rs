@@ -42,6 +42,30 @@ impl Ui {
         }
     }
 
+    /// One line pointing to the help, shown after usage errors and failures
+    /// instead of printing the whole help text.
+    pub fn help_hint() {
+        if atty::is(Stream::Stderr) {
+            eprintln!("  {} {} {} {} {}",
+                "Run".dimmed(), "rauri -h".yellow().bold(), "or".dimmed(),
+                "rauri --help".yellow().bold(), "to see all commands.".dimmed());
+        } else {
+            eprintln!("  Run rauri -h or rauri --help to see all commands.");
+        }
+    }
+
+    /// Shown when rauri is run without any arguments.
+    pub fn no_arguments() {
+        if atty::is(Stream::Stderr) {
+            eprintln!("{} {} {}", "rauri".cyan().bold(), "·".dimmed(), "a minimal AUR helper".dimmed());
+            eprintln!("{} {}", "ℹ".bright_cyan(), "No arguments supplied.".cyan());
+        } else {
+            eprintln!("rauri · a minimal AUR helper");
+            eprintln!("ℹ No arguments supplied.");
+        }
+        Self::help_hint();
+    }
+
     pub fn warning(msg: &str) {
         if Self::is_tty() {
             println!("{} {}", "⚠".bright_yellow(), msg.yellow());
@@ -143,7 +167,8 @@ impl Ui {
             (format!("{r}u, --unneeded"), "...only remove packages nothing depends on".into()),
             (format!("{r}ns, {r}sc, ..."), "Modifiers combine in any order, like pacman".into()),
             (format!("{l}, --list"), "List AUR packages installed via rauri".into()),
-            (format!("{la}, {l} --all, --list-all"), "List all installed packages, outdated first".into()),
+            (format!("{la}, --list-all"), "List AUR packages + outdated official packages".into()),
+            (format!("{la} --all"), "...and every official package, up to date or not".into()),
             (format!("{e}, --exclude [pkg]..."), "Exclude packages from updates (no pkg: show excluded)".into()),
             (format!("{inc}, --include [pkg]..."), "Include excluded packages again (no pkg: show excluded)".into()),
             ("<AUR_URL>".into(), "Install from AUR git link".into()),
@@ -183,6 +208,7 @@ impl Ui {
         println!("  rauri {r}ns package-name  # Also remove unneeded dependencies and config backups");
         println!("  rauri {l}");
         println!("  rauri {la}");
+        println!("  rauri {la} --all  # Include up-to-date official packages");
         println!("  rauri {e} package-name  # Skip package-name during updates");
         println!("  rauri {inc} package-name  # Update package-name again");
         println!("  rauri -C {l}  # Clear AUR path then list packages");

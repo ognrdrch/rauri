@@ -655,8 +655,10 @@ impl PackageManager {
         Ok(())
     }
 
-    /// List all installed packages (official + AUR), outdated ones first.
-    pub fn list_all(config: &Config) -> Result<()> {
+    /// List installed packages in two sections: every AUR (foreign) package with
+    /// its state, then official packages. Official packages are limited to the
+    /// outdated ones unless `all_official` is set. Outdated packages come first.
+    pub fn list_all(config: &Config, all_official: bool) -> Result<()> {
         let output = Command::new("pacman")
             .arg("-Q")
             .output()
@@ -670,44 +672,30 @@ impl PackageManager {
             return Ok(());
         }
 
-        // name -> newer version available
-        let mut updates: std::collections::HashMap<String, String> = Self::official_updates();
-
-        // Foreign packages (not in any repo): compare against the AUR.
-        let foreign: Vec<String> = Command::new("pacman")
+        // Foreign packages: installed but in no sync repo (AUR or built by hand).
+        let foreign: HashSet<String> = Command::new("pacman")
             .arg("-Qmq")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_string).collect())
             .unwrap_or_default();
-        let foreign_set: HashSet<&String> = foreign.iter().collect();
-        match Aur::get_packages_info(&foreign) {
-            Ok(aur) => {
-                for (name, version) in &installed {
-                    if let Some(pkg) = aur.get(name) {
-                        if &pkg.version != version {
-                            updates.insert(name.clone(), pkg.version.clone());
-                        }
-                    }
-                }
-            }
-            Err(e) => Ui::warning(&format!("Could not reach the AUR, not checking AUR packages: {}", e)),
-        }
+        let (aur_installed, official_installed): (Vec<_>, Vec<_>) = installed.into_iter()
+            .partition(|(name, _)| foreign.contains(name));
+        // makepkg's -debug split packages are build by-products, not AUR packages.
+        let aur_installed: Vec<_> = aur_installed.into_iter()
+            .filter(|(name, _)| !name.ends_with("-debug"))
+            .collect();
 
-        let is_tty = atty::is(Stream::Stdout);
-        let tag = |name: &String| {
-            let mut tags = String::new();
-            if foreign_set.contains(name) {
-                tags.push_str(" [aur]");
-            }
-            if config.excluded.contains(name) {
-                tags.push_str(" (excluded)");
-            }
-            if is_tty && !tags.is_empty() {
-                format!("{}{}{}", Colors::DIM, tags, Colors::RESET)
-            } else {
-                tags
+        let aur_names: Vec<String> = aur_installed.iter().map(|(n, _)| n.clone()).collect();
+        let aur_info = match Aur::get_packages_info(&aur_names) {
+            Ok(found) => Some(found),
+            Err(e) => {
+                Ui::warning(&format!("Could not reach the AUR, not checking AUR packages: {}", e));
+                None
             }
         };
+        let official_updates = Self::official_updates();
+
+        let is_tty = atty::is(Stream::Stdout);
         let heading = |text: String| {
             if is_tty {
                 println!("\n{}", text.cyan().bold());
@@ -715,33 +703,75 @@ impl PackageManager {
                 println!("\n{}", text);
             }
         };
-
-        let (outdated, current): (Vec<_>, Vec<_>) = installed.iter()
-            .partition(|(name, _)| updates.contains_key(name));
-
-        if !outdated.is_empty() {
-            heading(format!("Updates available ({}):", outdated.len()));
-            for (name, version) in &outdated {
-                let new = &updates[name];
-                if is_tty {
-                    println!("  {} {} → {}{}", name.bold(), version.yellow(), new.green(), tag(name));
-                } else {
-                    println!("  {} {} -> {}{}", name, version, new, tag(name));
-                }
-            }
-        }
-
-        heading(format!("Up to date ({}):", current.len()));
-        for (name, version) in &current {
+        let note = |text: &str| {
             if is_tty {
-                println!("  {} {}{}", name.bold(), version.green(), tag(name));
+                println!("  {}{}{}", Colors::DIM, text, Colors::RESET);
             } else {
-                println!("  {} {}{}", name, version, tag(name));
+                println!("  {}", text);
             }
+        };
+        let print_pkg = |name: &str, version: &str, newer: Option<&str>, extra: &str| {
+            let mut tags = extra.to_string();
+            if config.excluded.iter().any(|e| e == name) {
+                tags.push_str(" (excluded)");
+            }
+            let tags = if is_tty && !tags.is_empty() {
+                format!("{}{}{}", Colors::DIM, tags, Colors::RESET)
+            } else {
+                tags
+            };
+            match (newer, is_tty) {
+                (Some(new), true) => println!("  {} {} → {}{}", name.bold(), version.yellow(), new.green(), tags),
+                (Some(new), false) => println!("  {} {} -> {}{}", name, version, new, tags),
+                (None, true) => println!("  {} {}{}", name.bold(), version.green(), tags),
+                (None, false) => println!("  {} {}{}", name, version, tags),
+            }
+        };
+
+        // --- AUR: always every package, outdated first ---
+        let aur_newer = |name: &str, version: &str| -> Option<String> {
+            aur_info.as_ref()?.get(name)
+                .filter(|p| p.version != version)
+                .map(|p| p.version.clone())
+        };
+        let mut aur_rows: Vec<(String, String, Option<String>)> = aur_installed.into_iter()
+            .map(|(n, v)| { let newer = aur_newer(&n, &v); (n, v, newer) })
+            .collect();
+        aur_rows.sort_by_key(|(n, _, newer)| (newer.is_none(), n.clone()));
+        let aur_outdated = aur_rows.iter().filter(|r| r.2.is_some()).count();
+
+        heading(format!("AUR packages ({}, {} outdated):", aur_rows.len(), aur_outdated));
+        if aur_rows.is_empty() {
+            note("none installed");
+        }
+        for (name, version, newer) in &aur_rows {
+            let not_in_aur = aur_info.as_ref().is_some_and(|a| !a.contains_key(name));
+            print_pkg(name, version, newer.as_deref(), if not_in_aur { " (not in AUR)" } else { "" });
         }
 
-        if !outdated.is_empty() {
-            heading(format!("{} of {} packages have updates available", outdated.len(), installed.len()));
+        // --- Official: outdated only, unless --all ---
+        let mut official_rows: Vec<(String, String, Option<String>)> = official_installed.into_iter()
+            .map(|(n, v)| { let newer = official_updates.get(&n).cloned(); (n, v, newer) })
+            .filter(|(_, _, newer)| all_official || newer.is_some())
+            .collect();
+        official_rows.sort_by_key(|(n, _, newer)| (newer.is_none(), n.clone()));
+        let official_outdated = official_rows.iter().filter(|r| r.2.is_some()).count();
+
+        if all_official {
+            heading(format!("Official packages ({}, {} outdated):", official_rows.len(), official_outdated));
+        } else {
+            heading(format!("Official packages with updates ({}):", official_outdated));
+        }
+        if official_rows.is_empty() {
+            note("all up to date (use --all to list every official package)");
+        }
+        for (name, version, newer) in &official_rows {
+            print_pkg(name, version, newer.as_deref(), "");
+        }
+
+        let total = aur_outdated + official_outdated;
+        if total > 0 {
+            heading(format!("{} packages have updates available", total));
         }
         Ok(())
     }
